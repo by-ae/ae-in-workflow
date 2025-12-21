@@ -9,13 +9,22 @@ A collection of interactive nodes that provide **heavy interaction and streaming
 
 ## 🎯 Features
 
-- **Interactive Pose Editor**: Full-featured pose manipulation with multi-person support
-- **Real-time Editing**: Live visual feedback during pose manipulation
-- **Multi-person Support**: Handle complex scenes with multiple people
-- **Advanced Controls**: Comprehensive keyboard shortcuts for efficient editing
-- **Smart Caching**: Fast loading of previously edited poses + window position/size memory
-- **Default T-Pose**: Start editing from a clean T-pose when no input is provided
-- **Cross-platform**: Works on Windows, macOS, and Linux with native window positioning
+**🚀 Super Easy Pose Editing** - Click, drag, boop and you're done. No complex workflows or external tools needed!
+
+- **⚡ One-Click Editing**: Click any keypoint and drag to move it instantly
+- **🎯 Smart Person Selection**: Automatically selects the person closest to your cursor
+- **👥 Multi-Person Scenes**: Add, remove, and manage multiple people in one scene
+- **🔄 Pose Manipulation**: Move, rotate, and scale entire poses or individual limbs
+- **🦴 Limb Controls**: Move keypoints with or without their "children" (connected joints)
+- **🔄 Flip & Turn**: Mirror poses horizontally or rotate them 180°
+- **✨ Auto-Fix Missing Keypoints**: Estimates missing joints using T-pose proportions
+- **📐 Smart Spacing**: Automatically prevents people from overlapping
+- **🔄 Duplicate & Clone**: Copy poses for creating variations quickly
+- **🎬 Animation Chains**: Link multiple nodes for frame-by-frame stop-motion style animation
+- **💾 Smart Caching**: Remembers your edits for instant loading next time
+- **🖥️ Window Memory**: Remembers window position and size between sessions
+- **🌐 Cross-Platform**: Works identically on Windows, macOS, and Linux
+- **🎨 T-Pose Templates**: Start fresh with clean T-poses when no input provided
 
 ## 📦 Installation
 
@@ -55,21 +64,11 @@ screeninfo>=0.8.0  # Optional: improves window positioning
 
 ## 🎨 Nodes
 
-### Pose Editor (Interactive)
+### Interactive Pose Editor (ae)
 
 **Category:** `ae-in-workflow`
 
 An interactive pose editor that allows users to manipulate OpenPose keypoints with full control.
-
-#### Features:
-- **Individual Keypoint Editing**: Click and drag any keypoint
-- **Person Selection**: Automatically selects the person closest to your mouse
-- **Multi-person Support**: Handle scenes with multiple people
-- **Pose Manipulation**: Move, rotate, and scale entire poses
-- **Smart Spacing**: Automatically spaces overlapping people
-- **Keypoint Fixing**: Automatically estimates missing keypoints using T-pose proportions
-- **Duplication**: Clone poses for creating variations
-- **Caching**: Remembers your edits for faster subsequent sessions
 
 #### Controls:
 ```
@@ -123,27 +122,6 @@ ESC: Save & Exit
 2. Next time you load the same pose data, it starts with your previous edits
 3. Use Ctrl+Z to reset to the original if needed
 4. You can also link multiple Pose Editor nodes in your workflow to chain distinct poses for rudimentary animation
-
-## 🎮 Advanced Features
-
-### Intelligent Person Selection
-The editor automatically selects the person whose keypoints are closest to your mouse cursor, making it easy to work with crowded scenes.
-
-### Default T-Pose Creation
-When no pose data is provided as input, the editor automatically creates a natural T-pose template for immediate editing. Perfect for creating poses from scratch.
-
-### Scale-Aware Keypoint Fixing
-When using Ctrl+F to fix missing keypoints, the editor analyzes the scale of existing keypoints and applies proportional corrections based on T-pose anatomy.
-
-### Smart Caching
-- Each unique pose input gets cached separately
-- Subsequent edits of the same pose start with your last saved version
-- Cache persists between ComfyUI sessions
-
-### Window Position & Size Memory
-- Remembers exact window position and size between sessions
-- Cross-platform support using native system tools (xwininfo, PowerShell, osascript)
-- Use `reset_cached_window_position=True` to reset to defaults if window gets lost
 
 ## 🤝 Contributing
 
