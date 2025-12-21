@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ae-in-workflow - In-workflow Nodes</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .header {
+            text-align: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+        .node-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .feature-item {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎨 ae-in-workflow</h1>
+        <p><strong>In-workflow Nodes</strong> for ComfyUI</p>
+        <p>Heavy interaction and streaming capabilities for your ComfyUI workflows</p>
+    </div>
+
+    <div class="node-card">
+        <h2>🎭 Pose Editor (Interactive)</h2>
+        <p>Professional-grade pose manipulation with multi-person support</p>
+
+        <div class="feature-list">
+            <div class="feature-item">✏️ Individual keypoint editing</div>
+            <div class="feature-item">👥 Multi-person support</div>
+            <div class="feature-item">🔄 Pose duplication & deletion</div>
+            <div class="feature-item">🎯 Smart person selection</div>
+            <div class="feature-item">📏 Scale-aware keypoint fixing</div>
+            <div class="feature-item">💾 Intelligent caching</div>
+        </div>
+
+        <h3>🎮 Controls</h3>
+        <ul>
+            <li><strong>Left Click:</strong> Select and drag keypoints</li>
+            <li><strong>Left Drag:</strong> Move keypoint</li>
+            <li><strong>Ctrl + Left Drag:</strong> Move keypoint with children</li>
+            <li><strong>Middle Click + Drag:</strong> Move selected person</li>
+            <li><strong>Scroll:</strong> Zoom selected person</li>
+            <li><strong>Ctrl + Scroll:</strong> Rotate selected person</li>
+            <li><strong>Shift + Scroll:</strong> Rotate children around nearest keypoint</li>
+            <li><strong>Ctrl + D:</strong> Duplicate selected person</li>
+            <li><strong>Ctrl + X:</strong> Delete selected person</li>
+            <li><strong>Ctrl + N:</strong> Add new T-pose person</li>
+            <li><strong>Ctrl + F:</strong> Fix missing keypoints</li>
+            <li><strong>Ctrl + R:</strong> Flip horizontally (mirror pose)</li>
+            <li><strong>Ctrl + Shift + R:</strong> Flip horizontally (turn around)</li>
+            <li><strong>Ctrl + Z:</strong> Undo last action</li>
+            <li><strong>Ctrl + Shift + Z / Ctrl + Y:</strong> Redo action</li>
+            <li><strong>Ctrl + O:</strong> Reset to original input</li>
+            <li><strong>ESC:</strong> Save & Exit</li>
+        </ul>
+    </div>
+
+    <div class="node-card">
+        <h2>🚀 Coming Soon</h2>
+        <p>More interactive nodes for enhanced ComfyUI workflows</p>
+        <ul>
+            <li>Real-time video processing nodes</li>
+            <li>Interactive mask editors</li>
+            <li>Streaming workflow controllers</li>
+            <li>And more...</li>
+        </ul>
+    </div>
+
+    <div style="text-align: center; margin-top: 40px; color: #666;">
+        <p>Made with ❤️ by <a href="https://github.com/ae-maker" style="color: #667eea;">ae</a></p>
+        <p><a href="https://github.com/ae-maker/ae-in-workflow">GitHub Repository</a></p>
+    </div>
+</body>
+</html>
