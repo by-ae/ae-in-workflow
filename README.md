@@ -1,7 +1,7 @@
 # In-workflow Nodes for ComfyUI
 
-[![GitHub](https://img.shields.io/badge/GitHub-ae--maker-informational)](https://github.com/ae-maker)
-[![Author](https://img.shields.io/badge/Author-ae-blue)](https://github.com/ae-maker)
+[![GitHub](https://img.shields.io/badge/GitHub-by--ae-informational)](https://github.com/by-ae)
+[![Author](https://img.shields.io/badge/Author-by--ae-blue)](https://github.com/by-ae)
 
 A collection of interactive nodes that provide **heavy interaction and streaming capabilities** for ComfyUI workflows.
 
@@ -26,10 +26,20 @@ A collection of interactive nodes that provide **heavy interaction and streaming
    │   └── ae-in-workflow/
    │       ├── __init__.py
    │       ├── pose_editor.py
-   │       └── README.md
+   │       ├── setup.py
+   │       ├── requirements.txt
+   │       ├── pyproject.toml
+   │       ├── CHANGELOG.md
+   │       ├── LICENSE
+   │       ├── MANIFEST.in
+   │       ├── README.md
+   │       ├── assets/
+   │       │   └── screenshot.png
+   │       └── web/
+   │           └── index.html
    ```
 
-3. Restart ComfyUI
+2. Restart ComfyUI
 
 ## 🎨 Nodes
 
@@ -156,4 +166,4 @@ If you encounter any issues or have questions:
 
 ---
 
-**Made with ❤️ by ae**
+**Made with ❤️ by-ae**

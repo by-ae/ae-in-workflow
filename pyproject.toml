@@ -9,10 +9,10 @@ description = "In-workflow Nodes for ComfyUI - Heavy interaction and streaming c
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "ae", email = "ae@ae-maker.com"},
+    {name = "ae", email = "ae@by-ae.com"},
 ]
 maintainers = [
-    {name = "ae", email = "ae@ae-maker.com"},
+    {name = "ae", email = "ae@by-ae.com"},
 ]
 keywords = ["comfyui", "nodes", "workflow", "interactive", "pose", "editor"]
 classifiers = [
@@ -38,10 +38,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ae-maker/ae-in-workflow"
-Repository = "https://github.com/ae-maker/ae-in-workflow"
-Issues = "https://github.com/ae-maker/ae-in-workflow/issues"
-Changelog = "https://github.com/ae-maker/ae-in-workflow/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/by-ae/ae-in-workflow"
+Repository = "https://github.com/by-ae/ae-in-workflow"
+Issues = "https://github.com/by-ae/ae-in-workflow/issues"
+Changelog = "https://github.com/by-ae/ae-in-workflow/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 packages = ["ae_in_workflow"]

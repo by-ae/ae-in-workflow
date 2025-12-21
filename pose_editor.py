@@ -482,7 +482,7 @@ def draw_rotated_ellipse(surface, color, center, width, height, angle):
 
 def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached_window_position=False):
     """
-    Pose Editor - ae-maker
+    Pose Editor - by-ae
 
     CONTROLS:
     - Left click: Select keypoint on closest person (any visible keypoint)

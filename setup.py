@@ -18,11 +18,11 @@ setup(
     name="ae-in-workflow",
     version="0.1.1",
     author="ae",
-    author_email="ae@ae-maker.com",
+    author_email="ae@by-ae.com",
     description="In-workflow Nodes for ComfyUI - Heavy interaction and streaming capabilities",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/ae-maker/ae-in-workflow",
+    url="https://github.com/by-ae/ae-in-workflow",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",

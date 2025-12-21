@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Future**: Additional interactive nodes planned (mask editors, video processors, etc.)
 
 ### Contributing
-Please report issues and feature requests on the [GitHub repository](https://github.com/ae-maker/ae-in-workflow).
+Please report issues and feature requests on the [GitHub repository](https://github.com/by-ae/ae-in-workflow).
 
 ---
 
