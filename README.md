@@ -5,6 +5,8 @@
 
 A collection of interactive nodes that provide **heavy interaction and streaming capabilities** for ComfyUI workflows.
 
+![Screenshot](assets/screenshot.png)
+
 ## 🎯 Features
 
 - **Interactive Pose Editor**: Full-featured pose manipulation with multi-person support
@@ -17,11 +19,10 @@ A collection of interactive nodes that provide **heavy interaction and streaming
 
 ## 📦 Installation
 
-1. Clone or download this repository
-2. Copy the `ae-in-workflow` folder to your ComfyUI `custom_nodes` directory:
+1. Clone (or download and extract) this repository into your ComfyUI `custom_nodes` directory:
    ```
    ComfyUI/
-   ├── custom_nodes/
+   ├── custom_nodes/ <- clone here
    │   └── ae-in-workflow/
    │       ├── __init__.py
    │       ├── pose_editor.py
