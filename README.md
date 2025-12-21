@@ -41,6 +41,18 @@ A collection of interactive nodes that provide **heavy interaction and streaming
 
 2. Restart ComfyUI
 
+## 🔧 Requirements
+
+> **Note:** When you run `pip install -r requirements.txt` from within your ComfyUI virtual environment, these packages will be installed automatically.
+
+```txt
+pygame>=2.0.0
+torch>=1.9.0
+numpy>=1.19.0
+Pillow>=8.0.0
+screeninfo>=0.8.0  # Optional: improves window positioning
+```
+
 ## 🎨 Nodes
 
 ### Pose Editor (Interactive)
@@ -90,35 +102,27 @@ ESC: Save & Exit
 - **image**: Rendered pose visualization image
 - **edited_pose_data**: Modified pose data in OpenPose format as JSON string
 
-## 🔧 Requirements
-
-- ComfyUI
-- PyGame
-- PyTorch
-- NumPy
-- PIL (Pillow)
-- screeninfo (optional, for monitor detection)
-
 ## 📝 Usage Examples
 
 ### Basic Pose Editing
 1. Load pose data from OpenPose detection
-2. Connect to Pose Editor node
+2. Connect to the Pose Editor node
 3. Click "Queue" to launch the interactive editor
 4. Edit poses using mouse and keyboard controls
 5. Close the editor to get the modified pose data
 
 ### Multi-person Scene Creation
-1. Start with single person pose (or no input for default T-pose)
+1. Start with a single person pose (or no input for default T-pose)
 2. Use Ctrl+N to add more T-pose people
 3. Position and edit each person individually
 4. Use Ctrl+D to duplicate poses for variations
 5. Export the complete multi-person scene
 
-### Iterative Refinement
+### Iterative Refinement and Animation
 1. Edit a pose and save
 2. Next time you load the same pose data, it starts with your previous edits
-3. Use Ctrl+Z to reset to original if needed
+3. Use Ctrl+Z to reset to the original if needed
+4. You can also link multiple Pose Editor nodes in your workflow to chain distinct poses for rudimentary animation
 
 ## 🎮 Advanced Features
 
