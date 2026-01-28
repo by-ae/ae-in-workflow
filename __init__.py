@@ -5,6 +5,8 @@ ae-in-workflow - In-workflow Nodes for ComfyUI
 A collection of interactive nodes that provide heavy interaction and streaming capabilities for ComfyUI workflows.
 
 Current nodes:
+- Z-Image - Images To LoRA: Convert image batches to LoRA using DiffSynth-Studio's Z-Image pipeline with memory-efficient processing
+- Image Selector: Interactive image selection from folders with thumbnail grid view and batch processing
 - Pose Editor (Interactive): Professional pose manipulation with multi-person support, hierarchical editing, undo/redo, and intelligent caching
 """
 
@@ -29,6 +31,12 @@ if current_dir not in sys.path:
 
 # Import our pose editor
 from pose_editor import pose_editor
+
+# Import Z-Image functions
+from zimage_i2l import process_images_to_lora, ZIMAGE_AVAILABLE, DIFF_SYNTH_AVAILABLE, DEPENDENCIES_AVAILABLE
+
+# Import Image Selector functions
+from image_selector import image_selector
 
 # ComfyUI node class
 class PoseEditorNodeAE:
@@ -118,13 +126,215 @@ class PoseEditorNodeAE:
             fallback_tensor = torch.zeros(1, 64, 64, 3)
             return (fallback_tensor, POSE_KEYPOINT_optional)
 
+
+
+
+# ComfyUI node class for Z-Image - Images To LoRA conversion
+class ZImageImagesToLoRANodeAE:
+    """
+    This node takes a batch of images and converts them into a LoRA (Low-Rank Adaptation)
+    using the Z-Image i2L pipeline from DiffSynth-Studio.
+
+    Powered by DiffSynth-Studio: https://github.com/modelscope/DiffSynth-Studio
+
+    The generated LoRA files are saved in: models/loras/Z-Image/ae/z-image_<name>vXXX.safetensors
+    where XXX is an auto-incrementing version number.
+
+    Key Features:
+    - Memory-efficient processing with VRAM management
+    - Batch processing for large image sets
+    - Automatic version numbering to avoid overwrites
+    - Returns relative path compatible with LoraLoaderModelOnly node
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": (any_typ, {"tooltip": "Batch of images as tensor (shape: B,H,W,3) to convert to LoRA"}),
+                "lora_name": ("STRING", {
+                    "default": "my_lora",
+                    "tooltip": "Name for the LoRA dataset (will be sanitized for filename)"
+                }),
+            },
+            "optional": {
+                "batch_size": ("INT", {
+                    "default": 8,
+                    "min": 1,
+                    "max": 64,
+                    "step": 1,
+                    "tooltip": "Number of images to process simultaneously (higher = faster but more VRAM)"
+                }),
+                "seed": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 0xffffffffffffffff,
+                    "step": 1,
+                    "tooltip": "Change this value to force the node to run again with the same inputs"
+                }),
+            }
+        }
+
+    RETURN_TYPES = (any_typ,)
+    RETURN_NAMES = ("lora_path",)
+    OUTPUT_TOOLTIPS = (
+        "Relative path to the generated LoRA file (compatible with LoraLoaderModelOnly)",
+    )
+
+    FUNCTION = "images_to_lora"
+    CATEGORY = "ae-in-workflow"
+
+    def images_to_lora(self, images, lora_name, batch_size=8, seed=0):
+        """
+        Convert images to LoRA using Z-Image pipeline
+
+        Args:
+            images: Tensor of images (B, H, W, 3) to convert to LoRA
+            lora_name: Name for the LoRA dataset
+            batch_size: Number of images to process simultaneously
+
+        Returns:
+            str: Relative path to the generated LoRA file
+        """
+        if not DIFF_SYNTH_AVAILABLE:
+            raise ImportError("DiffSynth-Studio is not installed yet.\nSimply follow the instructions at https://github.com/modelscope/DiffSynth-Studio\nRead the github for more info: https://github.com/by-ae/ae-in-workflow")
+
+        if not DEPENDENCIES_AVAILABLE:
+            raise ImportError("You need to run `pip install -r requirements.txt` to install the required dependencies.\nRead the github for more info: https://github.com/by-ae/ae-in-workflow")
+
+        try:
+            # Validate inputs
+            if images is None:
+                raise ValueError("Images input cannot be None")
+
+            if not isinstance(images, torch.Tensor):
+                raise ValueError("Images must be a torch tensor")
+
+            if len(images.shape) != 4 or images.shape[-1] != 3:
+                raise ValueError(f"Images tensor must have shape (B, H, W, 3), got {images.shape}")
+
+            if images.shape[0] == 0:
+                raise ValueError("Images tensor cannot be empty")
+
+            # Process the images
+            result_path = process_images_to_lora(images, lora_name, batch_size)
+            return (result_path,)
+
+        except Exception as e:
+            print(f"Z-Image - Images To LoRA Error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise e
+
+
+# ComfyUI node class for Image Selector
+class ImageSelectorNodeAE:
+    """
+    Image Selector Node - Interactive image selection from folder
+
+    This node allows users to browse and select images from a folder using an interactive
+    pygame-based UI. Selected images are automatically resized and batched into tensors
+    suitable for use with other ComfyUI nodes.
+
+    Features:
+    - Browse images in folders with thumbnail grid view
+    - Click to select/deselect images (maintains selection order)
+    - Scroll through large image collections
+    - Automatic resizing with aspect ratio preservation
+    - Batch output in ComfyUI IMAGE format
+    - Optional target dimensions for consistent sizing
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "folder_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Path to folder containing images to select from"
+                }),
+            },
+            "optional": {
+                "target_width": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 4096,
+                    "step": 64,
+                    "tooltip": "Target width for resized images (0 = auto-calculate from largest image)"
+                }),
+                "target_height": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 4096,
+                    "step": 64,
+                    "tooltip": "Target height for resized images (0 = auto-calculate from largest image)"
+                }),
+                "seed": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 0xffffffffffffffff,
+                    "step": 1,
+                    "tooltip": "Change this value to force the node to run again with the same inputs"
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", any_typ)
+    RETURN_NAMES = ("images", "masks")
+    OUTPUT_TOOLTIPS = (
+        "Selected images as batched tensor in ComfyUI IMAGE format",
+        "Alpha masks for selected images (for images with transparency)"
+    )
+
+    FUNCTION = "select_images"
+    CATEGORY = "ae-in-workflow"
+
+    def select_images(self, folder_path, target_width=0, target_height=0, seed=0):
+        """
+        Launch interactive image selector UI
+
+        Args:
+            folder_path: Path to folder containing images
+            target_width: Target width for resizing (0 = auto)
+            target_height: Target height for resizing (0 = auto)
+
+        Returns:
+            tuple: (image_batch_tensor, mask_batch_tensor)
+        """
+        try:
+            # Call the image selector function
+            # It returns: image_list, mask_list, image_batch, mask_batch
+            _, _, image_batch, mask_batch = image_selector(
+                folder_path,
+                target_width if target_width > 0 else None,
+                target_height if target_height > 0 else None
+            )
+
+            # Return in ComfyUI format
+            return (image_batch, mask_batch)
+
+        except Exception as e:
+            print(f"Image Selector Error: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Return empty tensors on error
+            empty_image = torch.empty(0, 0, 0, 3)
+            empty_mask = torch.empty(0, 0, 0)
+            return (empty_image, empty_mask)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "PoseEditorAE": PoseEditorNodeAE,
+    "ZImageImagesToLoRAAE": ZImageImagesToLoRANodeAE,
+    "ImageSelectorAE": ImageSelectorNodeAE,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PoseEditorAE": "Interactive Pose Editor (ae)",
+    "ZImageImagesToLoRAAE": "Z-Image Images To LoRA (ae)",
+    "ImageSelectorAE": "Image Selector (ae)",
 }
 
 # Web directory for any static assets (if needed in future)

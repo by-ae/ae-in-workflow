@@ -30,3 +30,4 @@ build/
 # Test outputs
 pose_output.png
 pose_preview*.png
+code_styleguide.txt
