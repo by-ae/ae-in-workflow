@@ -15,7 +15,7 @@ try:
     from PIL import Image
     import os
     import re
-    from comfy.utils import folder_paths
+    import folder_paths
     DEPENDENCIES_AVAILABLE = True
 except ImportError:
     DEPENDENCIES_AVAILABLE = False
