@@ -51,9 +51,8 @@ But if you need them to proc again, just change the seed value and it will run a
 
 ### First Install DiffSynth-Studio via their installation guide at https://github.com/modelscope/DiffSynth-Studio (Do not just download the release)
 
-## 🚨 HOTFIX: Avoid OOM Errors
-
-**Important Memory Fix**: The Z-Image node loads large models that can cause OOM errors. To prevent this, use ComfyUI's "Unload Model" node after the Z-Image node in your workflow. This unloads the DiffSynth-Studio models from VRAM without requiring complex execution order management or additional nodes.
+## HOTFIX: Avoid OOM Errors
+**Important Memory Fix**: The Z-Image node loads large models that can cause OOM errors. To prevent this I've added a boolean (true/false) to unload all models before execution.
 
 
 ### Via ComfyUI Manager (Recommended):
