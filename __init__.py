@@ -38,6 +38,10 @@ from zimage_i2l import process_images_to_lora, ZIMAGE_AVAILABLE, DIFF_SYNTH_AVAI
 # Import Image Selector functions
 from image_selector import image_selector
 
+# Import model management and garbage collection
+from comfy.model_management import model_management
+import gc
+
 # ComfyUI node class
 class PoseEditorNodeAE:
     """
@@ -172,6 +176,10 @@ class ZImageImagesToLoRANodeAE:
                     "step": 1,
                     "tooltip": "Change this value to force the node to run again with the same inputs"
                 }),
+                "unload_models_before_running": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Unload all models before running the node"
+                }),
             }
         }
 
@@ -184,7 +192,7 @@ class ZImageImagesToLoRANodeAE:
     FUNCTION = "images_to_lora"
     CATEGORY = "ae-in-workflow"
 
-    def images_to_lora(self, images, lora_name, batch_size=8, seed=0):
+    def images_to_lora(self, images, lora_name, batch_size=8, seed=0, unload_models_before_running=True):
         """
         Convert images to LoRA using Z-Image pipeline
 
@@ -202,6 +210,15 @@ class ZImageImagesToLoRANodeAE:
         if not DEPENDENCIES_AVAILABLE:
             raise ImportError("You need to run `pip install -r requirements.txt` to install the required dependencies.\nRead the github for more info: https://github.com/by-ae/ae-in-workflow")
 
+        model_management.unload_all_models()
+        model_management.soft_empty_cache(True)
+        gc.collect()
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        except:
+            pass
+        
         try:
             # Validate inputs
             if images is None:
