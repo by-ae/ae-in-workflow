@@ -15,6 +15,7 @@ try:
     from PIL import Image
     import os
     import re
+    from comfy.utils import folder_paths
     DEPENDENCIES_AVAILABLE = True
 except ImportError:
     DEPENDENCIES_AVAILABLE = False
@@ -51,8 +52,9 @@ def process_images_to_lora(images_tensor, lora_name, batch_size):
     # Sanitize lora name
     sanitized_name = sanitize_lora_name(lora_name)
 
-    # Setup folders and paths
-    lora_folder = 'models/loras/'
+    # Setup folders and paths using ComfyUI's folder_paths system
+    lora_folders = folder_paths.get_folder_paths("loras")
+    lora_folder = lora_folders[0] if lora_folders else 'models/loras/'
     save_location_base = f'Z-Image/ae/z-image_{sanitized_name}'
     full_base_path = os.path.join(lora_folder, save_location_base)
 
