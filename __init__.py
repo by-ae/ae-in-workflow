@@ -39,7 +39,7 @@ from zimage_i2l import process_images_to_lora, ZIMAGE_AVAILABLE, DIFF_SYNTH_AVAI
 from image_selector import image_selector
 
 # Import model management and garbage collection
-from comfy.model_management import model_management
+import comfy.model_management as model_management
 import gc
 
 # ComfyUI node class
