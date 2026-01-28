@@ -16,7 +16,9 @@ But if you need them to proc again, just change the seed value and it will run a
 
 ## 🎯 NODES SO FAR:
 
-**Z-Image - Images To LoRA**: Brings DiffSynth-Studio's Z-Image i2L pipeline into ComfyUI as a convenient single-node solution for converting image batches to LoRA models. Seems to work great for Z-Image Turbo diffusion using some of the generated LoRAs btw.
+**Z-Image - Images To LoRA**: Brings DiffSynth-Studio's Z-Image i2L pipeline into ComfyUI as a convenient single-node solution for converting image batches to LoRA models.
+
+**Image Selector**: Interactive image selection from folders with thumbnail grid view and batch processing.
 
 **Interactive Pose Editor**: Pose manipulation with multi-person support, hierarchical editing, undo/redo, and caching.
 
@@ -46,6 +48,9 @@ But if you need them to proc again, just change the seed value and it will run a
 - **🎨 T-Pose Templates**: Start fresh with clean T-poses when no input provided
 
 ## 📦 Installation
+
+### First Install DiffSynth-Studio via their installation guide at https://github.com/modelscope/DiffSynth-Studio (Do not just download the release)
+
 
 ### Via ComfyUI Manager (Recommended):
 > **Note:** I'm relatively new to this so let me know if it has issues please.
@@ -136,7 +141,7 @@ Convert images to LoRA (Low-Rank Adaptation) using the Z-Image pipeline from Dif
 #### Usage Notes:
 - LoRA files are saved to: `models/loras/Z-Image/ae/z-image_<name>_vXXX.safetensors`
 - Connect the output directly to LoraLoaderModelOnly "lora_name" input
-- Requires DiffSynth-Studio and safetensors (installed via requirements.txt)
+- Requires DiffSynth-Studio (install via instructions at https://github.com/modelscope/DiffSynth-Studio)
 
 ### Image Selector (ae)
 
@@ -185,7 +190,13 @@ Mouse Wheel: Scroll through images
 **🎭 Interactive Pose Editor**: Pose manipulation with multi-person support, hierarchical editing, undo/redo, and caching.
 
 An interactive pose editor that allows users to manipulate OpenPose keypoints with full control.
+## 🎯 NODES SO FAR:
 
+**Z-Image - Images To LoRA**: Brings DiffSynth-Studio's Z-Image i2L pipeline into ComfyUI as a convenient single-node solution for converting image batches to LoRA models.
+
+**Image Selector**: Interactive image selection from folders with thumbnail grid view and batch processing.
+
+**Interactive Pose Editor**: Pose manipulation with multi-person support, hierarchical editing, undo/redo, and caching.
 #### Controls:
 ```
 Left Click: Select and drag keypoints
@@ -234,12 +245,12 @@ Note: Higher batch_size = faster processing, but uses more VRAM. Start around 8 
 ## Usage Examples
 
 ### 🎯 Image Selection: Curate Your Dataset
-1. **Set Folder Path**: Point to a folder containing your images (looks inside recursively for images in subfolders)
-2. **Launch Selector**: Run workflow to open the interactive browser
-3. **Browse & Select**: Scroll through thumbnails, click images to select/deselect (order is preserved in the output batch)
+1. **Set Folder Path**: Point to a folder containing your images
+2. **Launch Selector**: Click queue to open the interactive browser
+3. **Browse & Select**: Scroll through thumbnails, click images to select/deselect
 4. **Finish Selection**: Press ESC or ENTER when done
-5. **Auto Processing**: Images are automatically resized and batched (you can set target dimensions if you need consistent sizes, otherwise it auto-sizes based on your largest selected image)
-6. **Connect to Next**: Feed the batched images directly to other nodes (e.g. Z-Image - Images To LoRA node, or any other node that accepts image batches)
+5. **Auto Processing**: Images are automatically resized and batched
+6. **Connect to Next**: Feed the batched images directly to other nodes
 
 **Pro Tip**: Set target dimensions if you need consistent sizes, otherwise it auto-sizes based on your largest selected image.
 
