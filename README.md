@@ -14,6 +14,14 @@ Most of the time you will want to set these to Fixed for the node to run once an
 But if you need them to proc again, just change the seed value and it will run again with the same inputs.
 ```
 
+## HOTFIX:
+```
+The Z-Image i2L loads large models that can cause OOM errors.
+To prevent this I've added a boolean (true/false) to unload all models before execution.
+Recommend leaving it as True and things will just work as you expect.
+```
+
+
 ## 🎯 NODES SO FAR:
 
 **Z-Image - Images To LoRA**: Brings DiffSynth-Studio's Z-Image i2L pipeline into ComfyUI as a convenient single-node solution for converting image batches to LoRA models.
@@ -50,10 +58,6 @@ But if you need them to proc again, just change the seed value and it will run a
 ## 📦 Installation
 
 ### First Install DiffSynth-Studio via their installation guide at https://github.com/modelscope/DiffSynth-Studio (Do not just download the release)
-
-## HOTFIX: Avoid OOM Errors
-**Important Memory Fix**: The Z-Image node loads large models that can cause OOM errors. To prevent this I've added a boolean (true/false) to unload all models before execution.
-
 
 ### Via ComfyUI Manager (Recommended):
 > **Note:** I'm relatively new to this so let me know if it has issues please.
