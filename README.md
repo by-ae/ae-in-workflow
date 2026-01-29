@@ -57,7 +57,33 @@ Recommend leaving it as True and things will just work as you expect.
 
 ## 📦 Installation
 
-### First Install DiffSynth-Studio via their installation guide at https://github.com/modelscope/DiffSynth-Studio (Do not just download the release)
+### First Install DiffSynth-Studio:
+> Let me know if this doesn't cover your case.
+```
+For portable ComfyUI (python_embedded):
+git clone https://github.com/modelscope/DiffSynth-Studio.git  
+cd DiffSynth-Studio
+C:\full\path\to\ComfyUI_Portable\python_embedded\python.exe -m pip install -e .
+
+For .venv ComfyUI:
+C:\full\path\to\ComfyUI\.venv\Scripts\activate.bat # Windows
+source /home/full/path/to/ComfyUI/.venv/bin/activate
+git clone https://github.com/modelscope/DiffSynth-Studio.git  
+cd DiffSynth-Studio
+pip install -e .
+
+For conda/mamba/etc. ComfyUI:
+conda activate name_of_your_comfyui_env
+git clone https://github.com/modelscope/DiffSynth-Studio.git  
+cd DiffSynth-Studio
+pip install -e .
+
+"I don't have those, but I have a terminal in ComfyUI"(bottom right):
+git clone https://github.com/modelscope/DiffSynth-Studio.git  
+cd DiffSynth-Studio
+pip install -e .
+```
+
 
 ### Via ComfyUI Manager (Recommended):
 > **Note:** I'm relatively new to this so let me know if it has issues please.
