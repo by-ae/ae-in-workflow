@@ -32,6 +32,10 @@ Recommend leaving it as True and things will just work as you expect.
 
 **Interactive Pose Editor**: Pose manipulation with multi-person support, hierarchical editing, undo/redo, and caching.
 
+## 🔧 OTHER UTILS
+
+**Interpolate Float List**: Process and interpolate comma-separated float lists.
+
 ## 🚀 Key Features
 
 ### ✨ Z-Image - Images To LoRA
@@ -164,6 +168,9 @@ Convert images to LoRA (Low-Rank Adaptation) using the Z-Image pipeline from Dif
 
 #### Key Features:
 - **🎯 LoRA Creation**: Convert image batches to LoRA models using DiffSynth-Studio's pipeline
+- **⚖️ Weighted Averaging**: Apply custom weights to each image for fine-tuned LoRA generation
+- **🎚️ Strength Control**: Adjust overall LoRA strength with multiplier factor
+- **📏 Size Reduction**: Compress LoRA size by averaging groups of similar images
 - **🧠 Memory Efficient**: Includes VRAM management with bfloat16 precision
 - **📦 Batch Processing**: Handle large image sets with configurable batch sizes
 - **🔢 Auto-Versioning**: Automatic version numbering to avoid overwrites
@@ -173,6 +180,9 @@ Convert images to LoRA (Low-Rank Adaptation) using the Z-Image pipeline from Dif
 - **images** (required): Batch of images as tensor (shape: B×H×W×3)
 - **lora_name** (required): Dataset name for the LoRA (default: "my_lora")
 - **batch_size** (optional): Images to process simultaneously (default: 8, higher = faster but more VRAM)
+- **lora_weights** (optional): Comma-separated weights for each image (e.g., "1.0,2.0,0.5") - leave empty for equal weighting
+- **normalized_strength** (optional): Target strength normalization for saved LoRA (default: 1.0)
+- **reduce_size_factor** (optional): Batch size for averaging LoRAs (default: 1, higher = smaller final LoRA by averaging groups)
 - **seed** (optional): Change to force re-execution with same inputs (default: 0)
 
 #### Outputs:
@@ -215,6 +225,7 @@ Mouse Wheel: Scroll through images
 #### Outputs:
 - **images**: Selected images as batched tensor (ComfyUI IMAGE format)
 - **masks**: Alpha masks for images with transparency
+- **batch_count**: Number of images in the batch
 
 #### Usage Notes:
 - Supports PNG, JPG, JPEG, BMP, TIFF, WebP formats
@@ -230,58 +241,7 @@ Mouse Wheel: Scroll through images
 **🎭 Interactive Pose Editor**: Pose manipulation with multi-person support, hierarchical editing, undo/redo, and caching.
 
 An interactive pose editor that allows users to manipulate OpenPose keypoints with full control.
-## 🎯 NODES SO FAR:
 
-**Z-Image - Images To LoRA**: Brings DiffSynth-Studio's Z-Image i2L pipeline into ComfyUI as a convenient single-node solution for converting image batches to LoRA models.
-
-**Image Selector**: Interactive image selection from folders with thumbnail grid view and batch processing.
-
-**Interactive Pose Editor**: Pose manipulation with multi-person support, hierarchical editing, undo/redo, and caching.
-#### Controls:
-```
-Left Click: Select and drag keypoints
-Left Drag: Move keypoint
-Ctrl + Left Drag: Move keypoint with children
-Middle Click + Drag: Move selected person
-Scroll: Zoom selected person
-Ctrl + Scroll: Rotate selected person
-Shift + Scroll: Rotate children around nearest keypoint
-Ctrl + D: Duplicate selected person
-Ctrl + X: Delete selected person
-Ctrl + N: Add new T-pose person
-Ctrl + F: Fix missing keypoints
-Ctrl + R: Flip horizontally (mirror pose)
-Ctrl + Shift + R: Flip horizontally (turn around)
-Ctrl + Z: Undo last action
-Ctrl + Shift + Z / Ctrl + Y: Redo action
-Ctrl + O: Reset to original input
-ESC: Save & Exit
-```
-
-#### Inputs:
-- **pose_data** (optional): OpenPose format pose data as JSON string (if not provided, starts with default T-pose)
-- **padding** (optional): Padding around poses in output (default: 128)
-- **seed** (optional): Change to force re-execution with same pose data (default: 0)
-- **reset_cached_window_position** (optional): Reset window position/size to defaults (default: False)
-
-#### Outputs:
-- **image**: Rendered pose visualization image
-- **edited_pose_data**: Modified pose data in OpenPose format as JSON string
-
-![Pose Editor Interface](assets/pose_editor.png)
-
-### Z-Image - Images To LoRA
-1. **Prepare Images**: Load or generate a batch of images (any style, any subject)
-2. **Connect to Z-Image Node**: Feed your image batch into the Z-Image - Images To LoRA node
-3. **Name Your LoRA**: Set a descriptive name (e.g., "cyberpunk_style", "my_character")
-4. **Generate**: Click queue and wait for LoRA creation (uses GPU acceleration)
-5. **Use Immediately**: Connect output to LoraLoaderModelOnly
-
-Note: Higher batch_size = faster processing, but uses more VRAM. Start around 8 and work your way up/down as needed.
-
-![Z-Image Workflow](assets/zimage_workflow.png)
-
-----------------------------------------------------------
 ## Usage Examples
 
 ### 🎯 Image Selection: Curate Your Dataset

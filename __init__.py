@@ -4,10 +4,13 @@ ae-in-workflow - In-workflow Nodes for ComfyUI
 
 A collection of interactive nodes that provide heavy interaction and streaming capabilities for ComfyUI workflows.
 
-Current nodes:
+Main nodes:
 - Z-Image - Images To LoRA: Convert image batches to LoRA using DiffSynth-Studio's Z-Image pipeline with memory-efficient processing
 - Image Selector: Interactive image selection from folders with thumbnail grid view and batch processing
 - Pose Editor (Interactive): Professional pose manipulation with multi-person support, hierarchical editing, undo/redo, and intelligent caching
+
+Utils:
+- Interpolate Float List: Process and interpolate comma-separated float lists
 """
 
 import os
@@ -180,6 +183,24 @@ class ZImageImagesToLoRANodeAE:
                     "default": True,
                     "tooltip": "Unload all models before running the node"
                 }),
+                "lora_weights": ("STRING", {
+                    "default": "",
+                    "tooltip": "Comma-separated weights for each image (e.g., '1.0,2.0,0.5'). Leave empty for equal weighting."
+                }),
+                "normalize_saved_lora_strength_to": ("FLOAT", {
+                    "default": 1.00,
+                    "min": 0.01,
+                    "max": 5.00,
+                    "step": 0.01,
+                    "tooltip": "Identical behavior to setting LoRA Loader strength (use that for dialing in first).\nYour LoRA only works at 1.75 strength? No problem, set this to 1.75 and it will be the new 1.0"
+                }),
+                "reduce_size_factor": ("INT", {
+                    "default": 1,
+                    "min": 1,
+                    "max": 16,
+                    "step": 1,
+                    "tooltip": "Batch size for averaging LoRAs (higher = smaller final LoRA by averaging groups)"
+                }),
             }
         }
 
@@ -192,7 +213,7 @@ class ZImageImagesToLoRANodeAE:
     FUNCTION = "images_to_lora"
     CATEGORY = "ae-in-workflow"
 
-    def images_to_lora(self, images, lora_name, batch_size=8, seed=0, unload_models_before_running=True):
+    def images_to_lora(self, images, lora_name, batch_size=8, lora_weights="", normalize_saved_lora_strength_to=1.0, reduce_size_factor=1, seed=0, unload_models_before_running=True):
         """
         Convert images to LoRA using Z-Image pipeline
 
@@ -200,6 +221,9 @@ class ZImageImagesToLoRANodeAE:
             images: Tensor of images (B, H, W, 3) to convert to LoRA
             lora_name: Name for the LoRA dataset
             batch_size: Number of images to process simultaneously
+            lora_weights: List of weights for each image (for weighted averaging)
+            normalize_saved_lora_strength_to: Target strength normalization for saved LoRA
+            reduce_size_factor: Batch size for averaging LoRAs (reduces final size)
 
         Returns:
             str: Relative path to the generated LoRA file
@@ -233,8 +257,17 @@ class ZImageImagesToLoRANodeAE:
             if images.shape[0] == 0:
                 raise ValueError("Images tensor cannot be empty")
 
+            # Parse lora weights from string
+            weights_list = []
+            if lora_weights.strip():
+                try:
+                    weights_list = [float(w.strip()) for w in lora_weights.split(',') if w.strip()]
+                except ValueError:
+                    print(f"Warning: Invalid lora_weights format '{lora_weights}', using equal weights")
+                    weights_list = []
+
             # Process the images
-            result_path = process_images_to_lora(images, lora_name, batch_size)
+            result_path = process_images_to_lora(images, lora_name, batch_size, weights_list, normalize_saved_lora_strength_to, reduce_size_factor)
             return (result_path,)
 
         except Exception as e:
@@ -296,11 +329,12 @@ class ImageSelectorNodeAE:
             }
         }
 
-    RETURN_TYPES = ("IMAGE", any_typ)
-    RETURN_NAMES = ("images", "masks")
+    RETURN_TYPES = ("IMAGE", any_typ, "INT")
+    RETURN_NAMES = ("images", "masks", "batch_count")
     OUTPUT_TOOLTIPS = (
         "Selected images as batched tensor in ComfyUI IMAGE format",
-        "Alpha masks for selected images (for images with transparency)"
+        "Alpha masks for selected images (for images with transparency)",
+        "Number of images in the batch"
     )
 
     FUNCTION = "select_images"
@@ -327,8 +361,11 @@ class ImageSelectorNodeAE:
                 target_height if target_height > 0 else None
             )
 
+            # Get batch count
+            batch_count = image_batch.shape[0] if image_batch.numel() > 0 else 0
+
             # Return in ComfyUI format
-            return (image_batch, mask_batch)
+            return (image_batch, mask_batch, batch_count)
 
         except Exception as e:
             print(f"Image Selector Error: {e}")
@@ -338,7 +375,128 @@ class ImageSelectorNodeAE:
             # Return empty tensors on error
             empty_image = torch.empty(0, 0, 0, 3)
             empty_mask = torch.empty(0, 0, 0)
-            return (empty_image, empty_mask)
+            return (empty_image, empty_mask, 0)
+
+
+# ComfyUI node class for Float List Interpolation
+class InterpolateFloatListNodeAE:
+    """
+    Interpolate Float List - Process and interpolate lists of float values
+
+    This node takes a comma-separated list of floats and either interpolates them
+    across a specified count or trims/pads the list to match the count.
+
+    Useful for creating smooth transitions between values or ensuring consistent
+    list lengths for batch processing.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "floats": ("STRING", {
+                    "default": "3,2.5,2,1,0.5",
+                    "multiline": True,
+                    "tooltip": "Comma-separated list of float values (can use newlines, whitespace will be removed)"
+                }),
+            },
+            "optional": {
+                "count": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 1000,
+                    "step": 1,
+                    "tooltip": "Target count for interpolation/trimming (0 = return original list)"
+                }),
+                "interpolate_across_count": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Yes",
+                    "label_off": "No pad right with 1's",
+                    "tooltip": "If Yes: interpolate values across count. If No: trim/pad with 1s to match count"
+                }),
+            }
+        }
+
+    RETURN_TYPES = (any_typ, "STRING")
+    RETURN_NAMES = ("float_list", "csv_string")
+    OUTPUT_TOOLTIPS = (
+        "List of interpolated/processed float values",
+        "Comma-separated string of the float values"
+    )
+
+    FUNCTION = "interpolate_floats"
+    CATEGORY = "ae-in-workflow"
+
+    def interpolate_floats(self, floats, count=0, interpolate_across_count=True):
+        """
+        Process and interpolate float list
+
+        Args:
+            floats: Comma-separated string of float values
+            count: Target count for processing
+            interpolate_across_count: Whether to interpolate or trim/pad
+
+        Returns:
+            tuple: (list of processed float values, comma-separated string of values)
+        """
+        try:
+            # Process the input string
+            # Replace newlines with commas
+            processed = floats.replace('\n', ',')
+            # Remove all whitespace
+            processed = ''.join(processed.split())
+            # Parse into float list, filtering out empty strings
+            values = [float(n) for n in processed.split(",") if n.strip() != ""]
+
+            # If count <= 0, return original list
+            if count <= 0:
+                rounded_values = [round(v, 6) for v in values]
+                csv_string = ','.join(str(v) for v in rounded_values)
+                return (rounded_values, csv_string)
+
+            if interpolate_across_count:
+                # Interpolate across count items
+                if len(values) <= 1:
+                    # Not enough values to interpolate, return repeated first value
+                    rounded_values = [round(values[0], 6)] * count if values else [1.0] * count
+                    csv_string = ','.join(str(v) for v in rounded_values)
+                    return (rounded_values, csv_string)
+                else:
+                    # Linear interpolation between values
+                    result = []
+                    for i in range(count):
+                        # Calculate position in original array
+                        pos = (i / max(1, count - 1)) * (len(values) - 1)
+                        lower_idx = int(pos)
+                        upper_idx = min(lower_idx + 1, len(values) - 1)
+                        fraction = pos - lower_idx
+
+                        # Interpolate between lower and upper values
+                        interpolated_value = values[lower_idx] + (values[upper_idx] - values[lower_idx]) * fraction
+                        result.append(round(interpolated_value, 6))
+
+                    csv_string = ','.join(str(v) for v in result)
+                    return (result, csv_string)
+            else:
+                # Trim/pad with 1s to match count
+                if len(values) >= count:
+                    # Trim to count
+                    rounded_values = [round(v, 6) for v in values[:count]]
+                    csv_string = ','.join(str(v) for v in rounded_values)
+                    return (rounded_values, csv_string)
+                else:
+                    # Pad with 1s
+                    result = [round(v, 6) for v in values]  # Copy the list with rounding
+                    result.extend([1.0] * (count - len(values)))
+                    csv_string = ','.join(str(v) for v in result)
+                    return (result, csv_string)
+
+        except Exception as e:
+            print(f"Interpolate Float List Error: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty list and empty string on error
+            return ([], "")
 
 
 # Node registration
@@ -346,12 +504,14 @@ NODE_CLASS_MAPPINGS = {
     "PoseEditorAE": PoseEditorNodeAE,
     "ZImageImagesToLoRAAE": ZImageImagesToLoRANodeAE,
     "ImageSelectorAE": ImageSelectorNodeAE,
+    "InterpolateFloatListAE": InterpolateFloatListNodeAE,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PoseEditorAE": "Interactive Pose Editor (ae)",
     "ZImageImagesToLoRAAE": "Z-Image Images To LoRA (ae)",
     "ImageSelectorAE": "Image Selector (ae)",
+    "InterpolateFloatListAE": "Interpolate Float List (ae)",
 }
 
 # Web directory for any static assets (if needed in future)
