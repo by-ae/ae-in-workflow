@@ -1,8 +1,9 @@
 # In-workflow Nodes for ComfyUI
 
+[![Civitai](https://img.shields.io/badge/Civitai-@by_ae-%23DAA520?style=for-the-badge&logo=circle&logoColor=white)](https://civitai.com/user/by_ae)
+
 [![GitHub](https://img.shields.io/badge/GitHub-by--ae-informational)](https://github.com/by-ae)
 [![Author](https://img.shields.io/badge/Author-by--ae-blue)](https://github.com/by-ae)
-[![Civitai](https://img.shields.io/badge/Civitai-@by_ae-%23DAA520?style=for-the-badge&logo=circle&logoColor=white)](https://civitai.com/user/by_ae)
 
 A collection of interactive nodes that provide convenient workflow tools for ComfyUI.
 
