@@ -65,8 +65,13 @@ git clone https://github.com/modelscope/DiffSynth-Studio.git
 cd DiffSynth-Studio
 C:\full\path\to\ComfyUI_Portable\python_embedded\python.exe -m pip install -e .
 
-For .venv ComfyUI:
-C:\full\path\to\ComfyUI\.venv\Scripts\activate.bat # Windows
+For .venv ComfyUI (Windows):
+C:\full\path\to\ComfyUI\.venv\Scripts\activate.bat
+git clone https://github.com/modelscope/DiffSynth-Studio.git  
+cd DiffSynth-Studio
+pip install -e .
+
+For .venv ComfyUI (Linux):
 source /home/full/path/to/ComfyUI/.venv/bin/activate
 git clone https://github.com/modelscope/DiffSynth-Studio.git  
 cd DiffSynth-Studio
