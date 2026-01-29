@@ -7,7 +7,7 @@
 
 A collection of interactive nodes that provide convenient workflow tools for ComfyUI.
 
-![Screenshot](assets/banner.png
+![Screenshot](assets/banner.png)
 
 ## NOTE:
 ```
