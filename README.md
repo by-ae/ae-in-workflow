@@ -7,7 +7,7 @@
 
 A collection of interactive nodes that provide convenient workflow tools for ComfyUI.
 
-![Screenshot](assets/banner.png
+![Screenshot](assets/banner.png)
 
 ## NOTE:
 ```
@@ -16,19 +16,11 @@ Most of the time you will want to set these to Fixed for the node to run once an
 But if you need them to proc again, just change the seed value and it will run again with the same inputs.
 ```
 
-## HOTFIX:
-```
-The Z-Image i2L loads large models that can cause OOM errors.
-To prevent this I've added a boolean (true/false) to unload all models before execution.
-Recommend leaving it as True and things will just work as you expect.
-```
-
-
 ## 🎯 NODES SO FAR:
 
 **Z-Image - Images To LoRA**: Brings DiffSynth-Studio's Z-Image i2L pipeline into ComfyUI as a convenient single-node solution for converting image batches to LoRA models.
 
-**Image Selector**: Interactive image selection from folders with thumbnail grid view and batch processing.
+**Image Selector**: Interactive image selection from folders with thumbnail grid view, sorting, folder navigation, and asynchronous loading for enormous folders.
 
 **Interactive Pose Editor**: Pose manipulation with multi-person support, hierarchical editing, undo/redo, and caching.
 
@@ -197,23 +189,28 @@ Convert images to LoRA (Low-Rank Adaptation) using the Z-Image pipeline from Dif
 
 **Category:** `ae-in-workflow`
 
-**🎯 INTERACTIVE IMAGE BROWSER**: Browse and select images from folders using an intuitive thumbnail grid interface. Perfect for curating datasets before processing with other nodes.
+**🎯 INTERACTIVE IMAGE BROWSER**: Browse and select images from folders using an intuitive thumbnail grid interface with folder navigation and asynchronous loading. Perfect for curating datasets before processing with other nodes.
 
-An interactive image selector that displays images from a folder in a scrollable grid view. Click to select/deselect images, then automatically batch and resize them for use with other ComfyUI nodes.
+An interactive image selector that displays images from a folder in a scrollable grid view. Click to select/deselect images, navigate between folders instantly, and handle enormous folders without performance issues thanks to asynchronous loading.
 
 #### Key Features:
 - **🖼️ Thumbnail Grid View**: Visual browsing of images in folders
+- **📁 Folder Navigation**: Tree panel for browsing subdirectories and parent folders
 - **👆 Click Selection**: Click thumbnails to select/deselect (maintains order)
-- **📜 Scroll Support**: Navigate large image collections
-- **📐 Smart Resizing**: Automatic aspect-ratio-preserving resizing with padding
+- **📜 Smooth Scrolling**: Navigate large image collections with optimized performance
+- **⚡ Asynchronous Loading**: Handles enormous folders without freezing UI
+- **📐 Smart Resizing**: Automatic aspect-ratio-preserving resizing with custom padding
 - **🎨 Transparency Support**: Handles images with alpha channels
 - **📦 Batch Output**: Ready-to-use IMAGE tensors for ComfyUI workflows
 
 #### Controls:
 ```
-Left Click: Select/deselect image
+Left Click: Select/deselect image or navigate folders
+Ctrl+A: Select/deselect all images
+Ctrl+S: Cycle through sort modes (Name/Size/Modified/Created/Dimensions)
+Ctrl+D: Toggle sort direction (ascending/descending)
 ESC/ENTER: Finish selection and close
-Mouse Wheel: Scroll through images
+Mouse Wheel: Scroll through images (right) or folders (left)
 ```
 
 #### Inputs:
@@ -228,9 +225,17 @@ Mouse Wheel: Scroll through images
 - **batch_count**: Number of images in the batch
 
 #### Usage Notes:
-- Supports PNG, JPG, JPEG, BMP, TIFF, WebP formats
-- Images are resized maintaining aspect ratio with black padding
-- Selection order is preserved in the output batch
+- **Supported Formats**: PNG, JPG, JPEG, BMP, TIFF, WebP
+- **Asynchronous Loading**: Folders load in background with loading indicator - no UI freezing even with 1000+ images
+- **Lazy Loading**: Images are loaded on-demand with intelligent caching for smooth scrolling
+- **Memory Management**: Only visible images are kept in memory with automatic cleanup
+- **Folder Navigation**: Tree panel allows instant navigation between folders with async loading
+- **Performance**: Handles enormous folders efficiently with 1-image-per-frame loading limits
+- **Image Processing**: Images are resized maintaining aspect ratio with custom padding color
+- **Sorting**: Multiple sort options (Name, Size, Modified date, Created date, Dimensions) with persistent settings
+- **Selection**: Click thumbnails to select/deselect, Ctrl+A to select/deselect all
+- **UI Enhancements**: All text has black outlines for readability on dark backgrounds
+- **Batch Output**: Selection order is preserved in the output tensor
 
 ![Image Selector UI](assets/image_selector_ui.png)
 

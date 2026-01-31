@@ -301,7 +301,7 @@ class ImageSelectorNodeAE:
             "required": {
                 "folder_path": ("STRING", {
                     "default": "",
-                    "tooltip": "Path to folder containing images to select from"
+                    "tooltip": "Path to folder containing images to select from (or somewhere to start browsing)"
                 }),
             },
             "optional": {
@@ -326,6 +326,10 @@ class ImageSelectorNodeAE:
                     "step": 1,
                     "tooltip": "Change this value to force the node to run again with the same inputs"
                 }),
+                "padding_color": ("STRING", {
+                    "default": "#000000",
+                    "tooltip": "Hex color for image padding (e.g., #000000 for black, #FFFFFF for white)"
+                }),
             }
         }
 
@@ -340,7 +344,7 @@ class ImageSelectorNodeAE:
     FUNCTION = "select_images"
     CATEGORY = "ae-in-workflow"
 
-    def select_images(self, folder_path, target_width=0, target_height=0, seed=0):
+    def select_images(self, folder_path, target_width=0, target_height=0, seed=0, padding_color="#000000"):
         """
         Launch interactive image selector UI
 
@@ -358,7 +362,8 @@ class ImageSelectorNodeAE:
             _, _, image_batch, mask_batch = image_selector(
                 folder_path,
                 target_width if target_width > 0 else None,
-                target_height if target_height > 0 else None
+                target_height if target_height > 0 else None,
+                padding_color
             )
 
             # Get batch count

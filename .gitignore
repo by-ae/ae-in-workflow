@@ -31,3 +31,4 @@ build/
 pose_output.png
 pose_preview*.png
 code_styleguide.txt
+test_image_selector.py

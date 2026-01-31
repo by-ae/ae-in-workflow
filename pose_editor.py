@@ -24,13 +24,10 @@ def get_cache_dir():
     if CACHE_DIR is None:
         try:
             from folder_paths import get_user_directory
-            CACHE_DIR = get_user_directory()
+            CACHE_DIR = os.path.join(get_user_directory(), "ae-in-workflow", "pose_editor")
         except ImportError:
             # Fallback if folder_paths not available
-            CACHE_DIR = os.path.expanduser("~/.comfyui_cache")
-
-        # Create subdirectory for pose editor cache
-        CACHE_DIR = os.path.join(CACHE_DIR, "pose_editor")
+            CACHE_DIR = os.path.expanduser("~/.comfyui_cache/ae-in-workflow/pose_editor")
         CACHE_FILE = os.path.join(CACHE_DIR, "cache.json")
         WINDOW_CACHE_FILE = os.path.join(CACHE_DIR, "window_position.json")
 
