@@ -39,7 +39,7 @@ from pose_editor import pose_editor
 from zimage_i2l import process_images_to_lora, ZIMAGE_AVAILABLE, DIFF_SYNTH_AVAILABLE, DEPENDENCIES_AVAILABLE
 
 # Import Image Selector functions
-from image_selector import image_selector
+from image_selector import image_selector, hex_to_rgb
 
 # Import model management and garbage collection
 import comfy.model_management as model_management
@@ -309,14 +309,14 @@ class ImageSelectorNodeAE:
                     "default": 0,
                     "min": 0,
                     "max": 4096,
-                    "step": 64,
+                    "step": 1,
                     "tooltip": "Target width for resized images (0 = auto-calculate from largest image)"
                 }),
                 "target_height": ("INT", {
                     "default": 0,
                     "min": 0,
                     "max": 4096,
-                    "step": 64,
+                    "step": 1,
                     "tooltip": "Target height for resized images (0 = auto-calculate from largest image)"
                 }),
                 "seed": ("INT", {
@@ -367,17 +367,13 @@ class ImageSelectorNodeAE:
             if not os.path.isdir(folder_path):
                 raise ValueError(f"folder_path is not a directory: {folder_path}")
 
-            if target_width is not None:
+            if target_width is not None and target_width > 0:
                 if not isinstance(target_width, int):
                     raise ValueError(f"target_width must be an integer, got {type(target_width).__name__}: {target_width}")
-                if target_width <= 0:
-                    raise ValueError(f"target_width must be positive, got: {target_width}")
 
-            if target_height is not None:
+            if target_height is not None and target_height > 0:
                 if not isinstance(target_height, int):
                     raise ValueError(f"target_height must be an integer, got {type(target_height).__name__}: {target_height}")
-                if target_height <= 0:
-                    raise ValueError(f"target_height must be positive, got: {target_height}")
 
             if padding_color:
                 if not isinstance(padding_color, str):
@@ -405,6 +401,430 @@ class ImageSelectorNodeAE:
         except Exception as e:
             # Re-raise the exception so ComfyUI displays it properly to the user
             raise e
+
+
+# ComfyUI node class for Crop Image Batch to Mask Bounds
+class CropImageBatchToMaskBoundsNodeAE:
+    """
+    Crop Image Batch to Mask Bounds - Crop images to mask boundaries with intelligent resizing
+
+    This node crops images based on mask boundaries, with options for individual or combined cropping.
+    Useful for preparing masked objects for further processing while maintaining consistent dimensions.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE", {"tooltip": "Batch of images to crop (shape: B,H,W,C)"}),
+                "masks": ("MASK", {"tooltip": "Batch of masks defining crop boundaries (shape: B,H,W)"}),
+            },
+            "optional": {
+                "invert_mask": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert the mask before finding bounds"
+                }),
+                "mode": (["mask_for_each", "sum_of_masks"], {
+                    "default": "mask_for_each",
+                    "tooltip": "mask_for_each: crop each to individual mask bounds, then resize then pad to match combined bounds.\nsum_of_masks: crop all to combined mask bounds"
+                }),
+                "padding_color": ("STRING", {
+                    "default": "#000000",
+                    "tooltip": "Hex color for padding (e.g., #FF0000 for red)"
+                }),
+                "optional_padding": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 512,
+                    "step": 1,
+                    "tooltip": "Additional padding pixels to add around cropped area on each side"
+                }),
+                "optional_new_width": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 4096,
+                    "step": 1,
+                    "tooltip": "Force output width to this size (0 = use combined mask bounds)"
+                }),
+                "optional_new_height": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 4096,
+                    "step": 1,
+                    "tooltip": "Force output height to this size (0 = use combined mask bounds)"
+                }),
+                "color_fill_mask": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Fill masked areas with padding color before processing"
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("images", "masks")
+    OUTPUT_TOOLTIPS = (
+        "Cropped and resized images with consistent dimensions",
+        "Corresponding masks cropped, resized, and padded to match images"
+    )
+
+    FUNCTION = "crop_to_mask_bounds"
+    CATEGORY = "ae-in-workflow"
+
+    def crop_to_mask_bounds(self, images, masks, invert_mask=False, mode="mask_for_each", padding_color="#000000", optional_padding=0, color_fill_mask=True, optional_new_width=0, optional_new_height=0):
+        """
+        Crop images to mask bounds with intelligent resizing
+
+        Args:
+            images: Tensor of images (B, H, W, C)
+            masks: Tensor of masks (B, H, W)
+            invert_mask: Whether to invert masks before cropping
+            mode: "mask_for_each" or "sum_of_masks"
+            padding_color: Hex color for padding
+            optional_padding: Extra padding around cropped area
+            color_fill_mask: Whether to fill mask areas with padding color
+
+        Returns:
+            tuple: (cropped_images, cropped_masks)
+        """
+        # Validate inputs
+        if mode not in ["mask_for_each", "sum_of_masks"]:
+            raise ValueError(f"mode must be 'mask_for_each' or 'sum_of_masks', got: {mode}")
+
+        if not isinstance(optional_padding, int) or optional_padding < 0:
+            raise ValueError(f"optional_padding must be a non-negative integer, got: {optional_padding}")
+
+        if not isinstance(optional_new_width, int) or optional_new_width < 0:
+            raise ValueError(f"optional_new_width must be a non-negative integer, got: {optional_new_width}")
+
+        if not isinstance(optional_new_height, int) or optional_new_height < 0:
+            raise ValueError(f"optional_new_height must be a non-negative integer, got: {optional_new_height}")
+
+        # Validate padding_color format
+        import re
+        if not isinstance(padding_color, str) or not re.match(r'^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$', padding_color):
+            raise ValueError(f"padding_color must be a valid hex color (e.g., #FF0000), got: {padding_color}")
+
+        # Convert hex color to RGB tuple (needed for pre-padding)
+        try:
+            padding_rgb = hex_to_rgb(padding_color)
+        except ValueError:
+            print(f"Invalid padding_color '{padding_color}', using black")
+            padding_rgb = (0, 0, 0)
+
+        # Pre-process: expand canvas to target dimensions if specified
+        if optional_new_width > 0 or optional_new_height > 0:
+            target_width = optional_new_width
+            target_height = optional_new_height
+            images, masks = self._expand_canvas(images, masks, padding_rgb, target_width, target_height)
+
+        try:
+            # padding_rgb already converted above
+
+            # Process based on mode - use target dimensions as forced bounds if specified
+            forced_bounds = (target_width, target_height) if 'target_width' in locals() and target_width > 0 else None
+
+            if mode == "mask_for_each":
+                return self._crop_mask_for_each(images, masks, invert_mask, padding_rgb, optional_padding, color_fill_mask, forced_bounds)
+            elif mode == "sum_of_masks":
+                return self._crop_sum_of_masks(images, masks, invert_mask, padding_rgb, optional_padding, color_fill_mask, forced_bounds)
+            else:
+                raise ValueError(f"Unknown mode: {mode}")
+
+        except Exception as e:
+            # Re-raise the exception so ComfyUI displays it properly to the user
+            raise e
+
+    def _crop_mask_for_each(self, images, masks, invert_mask, padding_rgb, optional_padding, color_fill_mask, forced_bounds):
+        """Crop each image to its individual mask bounds, then resize all to match bounds"""
+        import torch
+        import numpy as np
+
+        batch_size = images.shape[0]
+        height, width = images.shape[1], images.shape[2]
+
+        cropped_images = []
+        cropped_masks = []
+        all_crop_heights = []
+        all_crop_widths = []
+
+        # First pass: crop each image individually
+        for i in range(batch_size):
+            img_tensor = images[i]  # (H, W, C)
+            mask_tensor = masks[i]  # (H, W)
+
+            # Convert tensors to numpy for processing
+            img_np = (img_tensor * 255).clamp(0, 255).byte().cpu().numpy()
+            mask_np = mask_tensor.cpu().numpy()
+
+            # Apply color_fill_mask preprocessing (fill opposite of what invert_mask uses)
+            if color_fill_mask:
+                if invert_mask:
+                    # Fill the mask areas (foreground) with padding color
+                    fill_mask = mask_np > 0.5
+                    img_np[fill_mask] = padding_rgb
+                else:
+                    # Fill the inverted areas (background) with padding color
+                    inverted_mask = 1.0 - mask_np
+                    fill_mask = inverted_mask > 0.5
+                    img_np[fill_mask] = padding_rgb
+
+            # Use original mask for bounds finding (don't invert for bounds)
+            bounds_mask = mask_np
+            if invert_mask:
+                bounds_mask = 1.0 - mask_np
+
+            # Find mask bounds
+            mask_binary = bounds_mask > 0.5
+            if not mask_binary.any():
+                # Empty mask - use full image
+                min_y, max_y = 0, height
+                min_x, max_x = 0, width
+            else:
+                rows = np.any(mask_binary, axis=1)
+                cols = np.any(mask_binary, axis=0)
+                min_y, max_y = np.where(rows)[0][[0, -1]]
+                min_x, max_x = np.where(cols)[0][[0, -1]]
+
+            # Add optional padding
+            min_y = max(0, min_y - optional_padding)
+            max_y = min(height, max_y + optional_padding)
+            min_x = max(0, min_x - optional_padding)
+            max_x = min(width, max_x + optional_padding)
+
+            crop_height = max_y - min_y + 1
+            crop_width = max_x - min_x + 1
+
+            # Track dimensions
+            all_crop_heights.append(crop_height)
+            all_crop_widths.append(crop_width)
+
+            # Crop image and original mask (not the inverted one)
+            cropped_img = img_np[min_y:max_y, min_x:max_x]
+            cropped_mask = mask_np[min_y:max_y, min_x:max_x]  # Always use original mask
+
+            cropped_images.append((cropped_img, crop_width, crop_height))
+            cropped_masks.append((cropped_mask, crop_width, crop_height))
+
+        # Determine final canvas dimensions
+        if forced_bounds:
+            # Use forced bounds
+            canvas_width, canvas_height = forced_bounds
+        else:
+            # Use combined bounds (existing behavior)
+            canvas_width = max(all_crop_widths) if all_crop_widths else 1
+            canvas_height = max(all_crop_heights) if all_crop_heights else 1
+
+        # Second pass: scale each cropped image UP to fit within canvas dimensions (maintaining aspect ratio), then pad
+        final_images = []
+        final_masks = []
+
+        for (cropped_img, orig_w, orig_h), (cropped_mask, _, _) in zip(cropped_images, cropped_masks):
+            # Scale UP to touch canvas bounds while maintaining aspect ratio
+            scale_w = canvas_width / orig_w
+            scale_h = canvas_height / orig_h
+
+            # Use the LARGER scale to ensure at least one dimension touches the edge
+            scale = max(scale_w, scale_h)
+
+            new_w = int(orig_w * scale)
+            new_h = int(orig_h * scale)
+
+            # Ensure we don't exceed canvas bounds
+            if new_w > canvas_width or new_h > canvas_height:
+                scale = min(canvas_width / orig_w, canvas_height / orig_h)
+                new_w = int(orig_w * scale)
+                new_h = int(orig_h * scale)
+
+            # Ensure at least 1 pixel
+            new_w = max(1, new_w)
+            new_h = max(1, new_h)
+
+            # Resize the cropped image and mask
+            from PIL import Image
+            pil_img = Image.fromarray(cropped_img)
+            pil_mask = Image.fromarray((cropped_mask * 255).astype(np.uint8), mode='L')
+
+            resized_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            resized_mask = pil_mask.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+            # Create canvas with target dimensions
+            canvas = np.full((canvas_height, canvas_width, 3), padding_rgb, dtype=np.uint8)
+            mask_canvas = np.zeros((canvas_height, canvas_width), dtype=np.float32)
+
+            # Center the resized content
+            y_offset = (canvas_height - new_h) // 2
+            x_offset = (canvas_width - new_w) // 2
+
+            # Paste resized content
+            canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = np.array(resized_img)
+            mask_canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = np.array(resized_mask).astype(np.float32) / 255.0
+
+            # Convert back to tensors
+            img_tensor = torch.from_numpy(canvas).float() / 255.0
+            mask_tensor = torch.from_numpy(mask_canvas)
+
+            final_images.append(img_tensor)
+            final_masks.append(mask_tensor)
+
+        # Batch tensors
+        image_batch = torch.stack(final_images, dim=0)  # (B, H, W, C)
+        mask_batch = torch.stack(final_masks, dim=0)    # (B, H, W)
+
+        return image_batch, mask_batch
+
+    def _crop_sum_of_masks(self, images, masks, invert_mask, padding_rgb, optional_padding, color_fill_mask, forced_bounds):
+        """Crop all images to the combined bounds of all masks"""
+        import torch
+        import numpy as np
+
+        batch_size = images.shape[0]
+        height, width = images.shape[1], images.shape[2]
+
+        # Apply color_fill_mask preprocessing to all images
+        processed_images = []
+        processed_masks = []
+
+        for i in range(batch_size):
+            img_tensor = images[i]
+            mask_tensor = masks[i]
+
+            img_np = (img_tensor * 255).clamp(0, 255).byte().cpu().numpy()
+            mask_np = mask_tensor.cpu().numpy()
+
+            # Apply color_fill_mask preprocessing (fill opposite of what invert_mask uses)
+            if color_fill_mask:
+                if invert_mask:
+                    # Fill the mask areas (foreground) with padding color
+                    fill_mask = mask_np > 0.5
+                    img_np[fill_mask] = padding_rgb
+                else:
+                    # Fill the inverted areas (background) with padding color
+                    inverted_mask = 1.0 - mask_np
+                    fill_mask = inverted_mask > 0.5
+                    img_np[fill_mask] = padding_rgb
+
+            processed_images.append(img_np)
+            processed_masks.append(mask_np)
+
+        # Find combined bounds across all masks
+        global_min_y = height
+        global_max_y = 0
+        global_min_x = width
+        global_max_x = 0
+
+        for i in range(batch_size):
+            mask_np = processed_masks[i]
+            bounds_mask = mask_np
+            if invert_mask:
+                bounds_mask = 1.0 - mask_np
+
+            mask_binary = bounds_mask > 0.5
+            if mask_binary.any():
+                rows = np.any(mask_binary, axis=1)
+                cols = np.any(mask_binary, axis=0)
+                min_y, max_y = np.where(rows)[0][[0, -1]]
+                min_x, max_x = np.where(cols)[0][[0, -1]]
+
+                global_min_y = min(global_min_y, min_y)
+                global_max_y = max(global_max_y, max_y)
+                global_min_x = min(global_min_x, min_x)
+                global_max_x = max(global_max_x, max_x)
+
+        # If no valid masks found, use full bounds
+        if global_min_y >= global_max_y:
+            global_min_y, global_max_y = 0, height
+            global_min_x, global_max_x = 0, width
+
+        # Add optional padding
+        global_min_y = max(0, global_min_y - optional_padding)
+        global_max_y = min(height, global_max_y + optional_padding)
+        global_min_x = max(0, global_min_x - optional_padding)
+        global_max_x = min(width, global_max_x + optional_padding)
+
+        # Use forced bounds or calculated bounds
+        if forced_bounds:
+            crop_height, crop_width = forced_bounds
+            # Use full image bounds for cropping
+            global_min_y, global_max_y = 0, height
+            global_min_x, global_max_x = 0, width
+        else:
+            crop_height = global_max_y - global_min_y
+            crop_width = global_max_x - global_min_x
+
+        # Crop all processed images and original masks to these bounds
+        cropped_images = []
+        cropped_masks = []
+
+        for i in range(batch_size):
+            img_np = processed_images[i]
+            mask_np = processed_masks[i]  # Always use original mask for output
+
+            # Crop
+            cropped_img = img_np[global_min_y:global_max_y, global_min_x:global_max_x]
+            cropped_mask = mask_np[global_min_y:global_max_y, global_min_x:global_max_x]
+
+            # Convert back to tensors
+            img_tensor = torch.from_numpy(cropped_img).float() / 255.0
+            mask_tensor = torch.from_numpy(cropped_mask)
+
+            cropped_images.append(img_tensor)
+            cropped_masks.append(mask_tensor)
+
+        # Batch tensors
+        image_batch = torch.stack(cropped_images, dim=0)  # (B, H, W, C)
+        mask_batch = torch.stack(cropped_masks, dim=0)    # (B, H, W)
+
+        return image_batch, mask_batch
+
+    def _expand_canvas(self, images, masks, padding_rgb, target_width, target_height):
+        """Expand canvas to at least target dimensions by padding"""
+        import torch
+        import numpy as np
+
+        batch_size = images.shape[0]
+        current_height, current_width = images.shape[1], images.shape[2]
+
+        # Expand dimensions if needed
+        expand_width = max(target_width, current_width)
+        expand_height = max(target_height, current_height)
+
+        # If no expansion needed, return as-is
+        if expand_width == current_width and expand_height == current_height:
+            return images, masks
+
+        padded_images = []
+        padded_masks = []
+
+        for i in range(batch_size):
+            img_tensor = images[i]
+            img_np = (img_tensor * 255).clamp(0, 255).byte().cpu().numpy()
+
+            # Create expanded canvas
+            expanded_img = np.full((expand_height, expand_width, 3), padding_rgb, dtype=np.uint8)
+
+            # Copy original content
+            expanded_img[:current_height, :current_width] = img_np
+
+            # Same for mask (pad with 0)
+            mask_tensor = masks[i]
+            mask_np = mask_tensor.cpu().numpy()
+
+            expanded_mask = np.zeros((expand_height, expand_width), dtype=np.float32)
+            expanded_mask[:current_height, :current_width] = mask_np
+
+            # Convert back to tensors
+            img_tensor = torch.from_numpy(expanded_img).float() / 255.0
+            mask_tensor = torch.from_numpy(expanded_mask)
+
+            padded_images.append(img_tensor)
+            padded_masks.append(mask_tensor)
+
+        # Batch tensors
+        image_batch = torch.stack(padded_images, dim=0)
+        mask_batch = torch.stack(padded_masks, dim=0)
+
+        return image_batch, mask_batch
+
 
 
 # ComfyUI node class for Float List Interpolation
@@ -533,6 +953,7 @@ NODE_CLASS_MAPPINGS = {
     "PoseEditorAE": PoseEditorNodeAE,
     "ZImageImagesToLoRAAE": ZImageImagesToLoRANodeAE,
     "ImageSelectorAE": ImageSelectorNodeAE,
+    "CropImageBatchToMaskBoundsAE": CropImageBatchToMaskBoundsNodeAE,
     "InterpolateFloatListAE": InterpolateFloatListNodeAE,
 }
 
@@ -540,6 +961,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PoseEditorAE": "Interactive Pose Editor (ae)",
     "ZImageImagesToLoRAAE": "Z-Image Images To LoRA (ae)",
     "ImageSelectorAE": "Image Selector (ae)",
+    "CropImageBatchToMaskBoundsAE": "Crop Image Batch to Mask Bounds (ae)",
     "InterpolateFloatListAE": "Interpolate Float List (ae)",
 }
 

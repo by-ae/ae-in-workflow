@@ -22,11 +22,15 @@ But if you need them to proc again, just change the seed value and it will run a
 
 **Image Selector**: Interactive image selection from folders with thumbnail grid view, sorting, folder navigation, and asynchronous loading for enormous folders.
 
+**Crop Image Batch to Mask Bounds**: Intelligent cropping of image batches based on mask boundaries with consistent output dimensions.
+
 **Interactive Pose Editor**: Pose manipulation with multi-person support, hierarchical editing, undo/redo, and caching.
 
 ## 🔧 OTHER UTILS
 
 **Interpolate Float List**: Process and interpolate comma-separated float lists.
+
+**Crop Image Batch to Mask Bounds**: Per image-mask pair mask-based cropping with optional forced output dimensions.
 
 ## 🚀 Key Features
 
@@ -231,13 +235,54 @@ Mouse Wheel: Scroll through images (right) or folders (left)
 - **Memory Management**: Only visible images are kept in memory with automatic cleanup
 - **Folder Navigation**: Tree panel allows instant navigation between folders with async loading
 - **Performance**: Handles enormous folders efficiently with 1-image-per-frame loading limits
+- **Pre-padding**: Optionally pad all images to consistent dimensions before mask processing
 - **Image Processing**: Images are resized maintaining aspect ratio with custom padding color
+- **Mask Processing**: Intelligent cropping based on mask bounds with aspect ratio preservation
 - **Sorting**: Multiple sort options (Name, Size, Modified date, Created date, Dimensions) with persistent settings
 - **Selection**: Click thumbnails to select/deselect, Ctrl+A to select/deselect all
 - **UI Enhancements**: All text has black outlines for readability on dark backgrounds
 - **Batch Output**: Selection order is preserved in the output tensor
 
 ![Image Selector UI](assets/image_selector_ui.png)
+
+### Crop Image Batch to Mask Bounds (ae)
+
+**Category:** `ae-in-workflow`
+
+**✂️ Intelligent Mask-Based Cropping**: Crop image batches to mask boundaries with options for individual or combined cropping, ensuring consistent output dimensions.
+
+This node crops images based on mask boundaries, with two modes for different use cases. Perfect for preparing masked objects or scenes for further processing while maintaining alignment between images and masks.
+
+#### Key Features:
+- **🎯 Mask-Based Cropping**: Automatically finds and crops to mask boundaries
+- **🔄 Two Cropping Modes**: Individual object cropping or combined scene cropping
+- **📐 Consistent Dimensions**: All outputs have matching dimensions with intelligent scaling and padding
+- **🎨 Custom Padding**: Choose padding color for consistent backgrounds
+- **🔄 Mask Alignment**: Output masks are cropped/resized identically to maintain perfect alignment
+
+#### Modes:
+- **mask_for_each**: Crop each image to its individual mask bounds, scale UP to match combined bounds (maintaining aspect ratio), pad as needed
+- **sum_of_masks**: Crop all images to the combined bounds of all masks (scene-level cropping)
+
+#### Inputs:
+- **images** (required): Batch of images to crop (B,H,W,C)
+- **masks** (required): Corresponding masks defining crop boundaries (B,H,W)
+- **invert_mask** (optional): Invert masks before finding bounds (default: False)
+- **mode** (optional): Cropping mode - "mask_for_each" or "sum_of_masks" (default: "mask_for_each")
+- **padding_color** (optional): Hex color for padding areas (default: "#000000")
+- **optional_padding** (optional): Extra padding pixels around cropped areas (default: 0)
+- **optional_new_width** (optional): Pad images to this width before processing (default: 0)
+- **optional_new_height** (optional): Pad images to this height before processing (default: 0)
+
+#### Outputs:
+- **images**: Cropped and resized images with consistent dimensions
+- **masks**: Corresponding masks cropped, resized, and padded to match images
+
+#### Usage Notes:
+- **Empty Masks**: Images with empty/invalid masks are cropped to full bounds
+- **Aspect Ratio**: Cropped content maintains original proportions with padding
+- **Batch Consistency**: All images in batch end up with identical dimensions
+- **Mask Alignment**: Output masks perfectly align with their corresponding images
 
 ### Interactive Pose Editor (ae)
 
@@ -248,6 +293,15 @@ Mouse Wheel: Scroll through images (right) or folders (left)
 An interactive pose editor that allows users to manipulate OpenPose keypoints with full control.
 
 ## Usage Examples
+
+### ✂️ Mask-Based Image Cropping
+1. **Generate Masks**: Use segmentation models to create masks for objects/scenes
+2. **Connect Inputs**: Feed image batch and corresponding mask batch to Crop node
+3. **Choose Mode**:
+   - Use "mask_for_each" for individual objects (each cropped to its own bounds, then resized to match)
+   - Use "sum_of_masks" for scenes (all cropped to combined bounds)
+4. **Adjust Settings**: Set padding color and optional padding as needed
+5. **Consistent Output**: All images now have identical dimensions, ready for batch processing
 
 ### 🎯 Image Selection: Curate Your Dataset
 1. **Set Folder Path**: Point to a folder containing your images
