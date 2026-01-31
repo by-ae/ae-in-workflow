@@ -357,6 +357,36 @@ class ImageSelectorNodeAE:
             tuple: (image_batch_tensor, mask_batch_tensor)
         """
         try:
+            # Validate inputs before proceeding
+            if not folder_path or not isinstance(folder_path, str):
+                raise ValueError(f"folder_path must be a non-empty string, got {type(folder_path).__name__}: {folder_path}")
+
+            import os
+            if not os.path.exists(folder_path):
+                raise ValueError(f"folder_path does not exist: {folder_path}")
+            if not os.path.isdir(folder_path):
+                raise ValueError(f"folder_path is not a directory: {folder_path}")
+
+            if target_width is not None:
+                if not isinstance(target_width, int):
+                    raise ValueError(f"target_width must be an integer, got {type(target_width).__name__}: {target_width}")
+                if target_width <= 0:
+                    raise ValueError(f"target_width must be positive, got: {target_width}")
+
+            if target_height is not None:
+                if not isinstance(target_height, int):
+                    raise ValueError(f"target_height must be an integer, got {type(target_height).__name__}: {target_height}")
+                if target_height <= 0:
+                    raise ValueError(f"target_height must be positive, got: {target_height}")
+
+            if padding_color:
+                if not isinstance(padding_color, str):
+                    raise ValueError(f"padding_color must be a string, got {type(padding_color).__name__}: {padding_color}")
+                # Basic hex color validation (#RRGGBB or #RGB)
+                import re
+                if not re.match(r'^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$', padding_color):
+                    raise ValueError(f"padding_color must be a valid hex color (e.g., #FF0000), got: {padding_color}")
+
             # Call the image selector function
             # It returns: image_list, mask_list, image_batch, mask_batch
             _, _, image_batch, mask_batch = image_selector(
@@ -373,14 +403,8 @@ class ImageSelectorNodeAE:
             return (image_batch, mask_batch, batch_count)
 
         except Exception as e:
-            print(f"Image Selector Error: {e}")
-            import traceback
-            traceback.print_exc()
-
-            # Return empty tensors on error
-            empty_image = torch.empty(0, 0, 0, 3)
-            empty_mask = torch.empty(0, 0, 0)
-            return (empty_image, empty_mask, 0)
+            # Re-raise the exception so ComfyUI displays it properly to the user
+            raise e
 
 
 # ComfyUI node class for Float List Interpolation

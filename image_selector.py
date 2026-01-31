@@ -393,9 +393,9 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
     loading_folder = False
     loading_thread = None
 
-    # Selection state - track order of selection
-    selected_indices = []  # Will store indices in order they were selected
-    selected_set = set()   # For quick lookup of what's selected
+    # Selection state - track selected file paths
+    selected_paths = []  # Will store paths in order they were selected
+    selected_path_set = set()   # For quick lookup of selected paths
     scroll_offset = 0
     max_scroll = max(0, ((len(paths) + cols - 1) // cols) * cell_height - screen_height + 100)
 
@@ -414,13 +414,14 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                     running = False
                 elif event.key == pygame.K_a and pygame.key.get_mods() & pygame.KMOD_CTRL:
                     # Ctrl+A to select/deselect all
-                    select_all = not select_all
-                    if select_all:
-                        selected_indices = list(range(len(paths)))
-                        selected_set = set(range(len(paths)))
+                    if len(selected_paths) != len(paths):
+                        # Select all in current sorted order
+                        selected_paths = paths.copy()
+                        selected_path_set = set(paths)
                     else:
-                        selected_indices = []
-                        selected_set = set()
+                        # Deselect all
+                        selected_paths = []
+                        selected_path_set = set()
                 elif event.key == pygame.K_s and pygame.key.get_mods() & pygame.KMOD_CTRL:
                     # Ctrl+S to cycle sort mode
                     sort_mode_index = (sort_mode_index + 1) % len(sort_modes)
@@ -445,15 +446,17 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                         button_y = screen_height - 70
                         if button_y <= mouse_y <= button_y + 20:
                             # Select All button
-                            select_all_surface = font.render("SELECT ALL" if not select_all else "DESELECT ALL", True, TEXT_COLOR)
+                            select_all_text = "SELECT ALL" if len(selected_paths) != len(paths) else "DESELECT ALL"
+                            select_all_surface = render_text_with_outline(font, select_all_text, TEXT_COLOR)
                             if select_all_x <= mouse_x <= select_all_x + select_all_surface.get_width():
-                                select_all = not select_all
-                                if select_all:
-                                    selected_indices = list(range(len(paths)))
-                                    selected_set = set(range(len(paths)))
+                                if len(selected_paths) != len(paths):
+                                    # Select all in current sorted order
+                                    selected_paths = paths.copy()
+                                    selected_path_set = set(paths)
                                 else:
-                                    selected_indices = []
-                                    selected_set = set()
+                                    # Deselect all
+                                    selected_paths = []
+                                    selected_path_set = set()
                                 break
                             # Sort Mode button
                             elif sort_mode_x <= mouse_x <= sort_mode_x + font.render(f"Sort: {sort_modes[sort_mode_index].title()}", True, TEXT_COLOR).get_width():
@@ -481,8 +484,8 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                                     # Navigate to folder - async loading
                                     current_folder = item_path
                                     loading_folder = True
-                                    selected_indices = []
-                                    selected_set = set()
+                                    selected_paths = []
+                                    selected_path_set = set()
                                     folder_tree = build_folder_tree(current_folder, current_folder)
                                     tree_scroll_offset = 0
                                     max_tree_scroll = max(0, len(folder_tree) * 25 - (screen_height - 100))
@@ -502,21 +505,21 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                         mouse_y += scroll_offset
 
                         # Check which thumbnail was clicked
-                        for i, _ in enumerate(paths):
+                        for i, path in enumerate(paths):
                             row = i // cols
                             col = i % cols
                             x = thumbnail_panel_x + col * cell_width + padding
                             y = row * cell_height + padding
                             if (x <= mouse_x + tree_width < x + thumb_width and
                                 y <= mouse_y < y + thumb_height):
-                                if i in selected_set:
+                                if path in selected_path_set:
                                     # Remove from selection
-                                    selected_indices.remove(i)
-                                    selected_set.remove(i)
+                                    selected_paths.remove(path)
+                                    selected_path_set.remove(path)
                                 else:
                                     # Add to selection
-                                    selected_indices.append(i)
-                                    selected_set.add(i)
+                                    selected_paths.append(path)
+                                    selected_path_set.add(path)
                                 break
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 4:  # Mouse wheel up
@@ -623,7 +626,7 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                     thumb_surface.blit(text_surface, (5, lazy_loader.thumbnail_size[1]//2 - 8))
 
                 # Thumbnail background
-                bg_color = SELECTED_COLOR if i in selected_set else THUMB_BG
+                bg_color = SELECTED_COLOR if path in selected_path_set else THUMB_BG
                 pygame.draw.rect(screen, bg_color,
                                (x - 5, y - 5, thumb_width + 10, thumb_height + 10))
                 pygame.draw.rect(screen, BORDER_COLOR,
@@ -657,7 +660,7 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
             pygame.draw.rect(screen, BORDER_COLOR, (screen_width - 10, scroll_bar_y, 8, scroll_bar_height))
 
         # Instructions
-        selected_count = len(selected_indices)
+        selected_count = len(selected_paths)
         sort_mode_name = sort_modes[sort_mode_index].title()
         sort_dir_symbol = "↑" if sort_ascending else "↓"
         instr_text = f"Selected: {selected_count} | ESC/ENTER: finish | Ctrl+A: select all | Ctrl+S: sort mode | Ctrl+D: direction"
@@ -675,7 +678,7 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
     pygame.quit()
 
     # Return indices of selected images in order they were clicked
-    return selected_indices
+    return selected_paths
 
 def process_selected_images(images, selected_indices, target_width_param=None, target_height_param=None, padding_color="#000000"):
     """Process selected images into required formats"""
@@ -792,10 +795,9 @@ def image_selector(folder_path, target_width_param=None, target_height_param=Non
     paths = sort_image_paths(paths, 'name', True)
 
     # Show selection UI (will load images lazily)
-    selected_indices = create_image_selector_ui(paths, folder_path, padding_color, target_width_param, target_height_param)
+    selected_paths = create_image_selector_ui(paths, folder_path, padding_color, target_width_param, target_height_param)
 
     # Now load only the selected images
-    selected_paths = [paths[i] for i in selected_indices]
     selected_images = []
     for path in selected_paths:
         try:
