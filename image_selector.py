@@ -141,8 +141,23 @@ def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     Raises:
         ValueError: If hex_color is not a valid hex color string
     """
+    if not isinstance(hex_color, str):
+        raise ValueError(f"hex_color must be a string, got {type(hex_color).__name__}")
+    
+    if not hex_color.startswith('#'):
+        raise ValueError(f"hex_color must start with '#', got: {hex_color}")
+    
     hex_color = hex_color.lstrip('#')
-    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    
+    # Validate length (must be 6 for #RRGGBB format)
+    if len(hex_color) != 6:
+        raise ValueError(f"hex_color must be 6 characters after '#', got {len(hex_color)}: #{hex_color}")
+    
+    # Validate hex characters
+    try:
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    except ValueError as e:
+        raise ValueError(f"Invalid hex color format: #{hex_color}") from e
 
 def build_folder_tree(root_path, current_path):
     """Build a hierarchical list of folders and files with back navigation"""
