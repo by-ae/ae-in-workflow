@@ -426,6 +426,11 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
     running = True
     clock = pygame.time.Clock()
     select_all = False
+    
+    # Button position variables (calculated each frame but initialized here to avoid undefined name errors)
+    select_all_x = 10
+    sort_mode_x = 150
+    sort_dir_x = 300
 
     while running:
         for event in pygame.event.get():
