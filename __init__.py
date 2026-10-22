@@ -42,7 +42,11 @@ from zimage_i2l import process_images_to_lora, ZIMAGE_AVAILABLE, DIFF_SYNTH_AVAI
 from image_selector import image_selector, hex_to_rgb
 
 # Import model management and garbage collection
-import comfy.model_management as model_management
+try:
+    import comfy.model_management as model_management
+except ImportError:
+    # Allow import without ComfyUI for testing
+    model_management = None
 import gc
 
 # ComfyUI node class
@@ -234,8 +238,9 @@ class ZImageImagesToLoRANodeAE:
         if not DEPENDENCIES_AVAILABLE:
             raise ImportError("You need to run `pip install -r requirements.txt` to install the required dependencies.\nRead the github for more info: https://github.com/by-ae/ae-in-workflow")
 
-        model_management.unload_all_models()
-        model_management.soft_empty_cache(True)
+        if model_management is not None:
+            model_management.unload_all_models()
+            model_management.soft_empty_cache(True)
         gc.collect()
         try:
             torch.cuda.empty_cache()

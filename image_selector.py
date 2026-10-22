@@ -3,12 +3,11 @@ import pygame
 import torch
 import numpy as np
 from PIL import Image
-import torchvision.transforms as T
-from torchvision.transforms.functional import resize
 import math
 import time
 import json
 import threading
+from typing import Tuple, List, Optional
 
 def load_images_from_folder(folder_path):
     """Load all image files from folder"""
@@ -130,10 +129,35 @@ def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, 
     thread.start()
     return thread
 
-def hex_to_rgb(hex_color):
-    """Convert hex color string to RGB tuple"""
+def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
+    """Convert hex color string to RGB tuple
+    
+    Args:
+        hex_color: Hex color string (e.g. '#FF0000' or '#F00')
+        
+    Returns:
+        Tuple of (red, green, blue) values (0-255)
+        
+    Raises:
+        ValueError: If hex_color is not a valid hex color string
+    """
+    if not isinstance(hex_color, str):
+        raise ValueError(f"hex_color must be a string, got {type(hex_color).__name__}")
+    
+    if not hex_color.startswith('#'):
+        raise ValueError(f"hex_color must start with '#', got: {hex_color}")
+    
     hex_color = hex_color.lstrip('#')
-    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    
+    # Validate length (must be 6 for #RRGGBB format)
+    if len(hex_color) != 6:
+        raise ValueError(f"hex_color must be 6 characters after '#', got {len(hex_color)}: #{hex_color}")
+    
+    # Validate hex characters
+    try:
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    except ValueError as e:
+        raise ValueError(f"Invalid hex color format: #{hex_color}") from e
 
 def build_folder_tree(root_path, current_path):
     """Build a hierarchical list of folders and files with back navigation"""
@@ -402,6 +426,11 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
     running = True
     clock = pygame.time.Clock()
     select_all = False
+    
+    # Button position variables (calculated each frame but initialized here to avoid undefined name errors)
+    select_all_x = 10
+    sort_mode_x = 150
+    sort_dir_x = 300
 
     while running:
         for event in pygame.event.get():

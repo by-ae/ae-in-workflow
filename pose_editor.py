@@ -693,7 +693,7 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
 
     def save_undo_state():
         """Save current editor state to undo buffer"""
-        nonlocal undo_buffer, undo_index
+        nonlocal undo_index
 
         # Create a deep copy of the current state
         state = {
