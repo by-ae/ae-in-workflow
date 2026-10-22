@@ -3,8 +3,6 @@ import pygame
 import torch
 import numpy as np
 from PIL import Image
-import torchvision.transforms as T
-from torchvision.transforms.functional import resize
 import math
 import time
 import json
