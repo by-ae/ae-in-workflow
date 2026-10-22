@@ -1,6 +1,8 @@
 # In-workflow Nodes for ComfyUI
 [![GitHub](https://img.shields.io/badge/GitHub-by--ae-informational)](https://github.com/by-ae)
 [![Author](https://img.shields.io/badge/Author-by--ae-blue)](https://github.com/by-ae)
+[![CI](https://github.com/by-ae/ae-in-workflow/actions/workflows/ci.yml/badge.svg)](https://github.com/by-ae/ae-in-workflow/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A collection of interactive nodes that provide convenient workflow tools for ComfyUI.
 
@@ -56,96 +58,82 @@ But if you need them to proc again, just change the seed value and it will run a
 
 ## 📦 Installation
 
-### First Install DiffSynth-Studio:
-> Let me know if this doesn't cover your case.
-```
+### Quick Start (ComfyUI Manager - Recommended)
+1. Open ComfyUI Manager in ComfyUI
+2. Click "Install via Git URL"
+3. Paste: `https://github.com/by-ae/ae-in-workflow.git`
+4. Click "Install" and restart ComfyUI
+5. For Z-Image functionality, install DiffSynth-Studio (see below)
+
+### For Z-Image - Images To LoRA Node
+This node requires DiffSynth-Studio. The other nodes work without it.
+
+**Installation steps:**
+1. Activate your ComfyUI Python environment
+2. Run these commands:
+   ```bash
+   git clone https://github.com/modelscope/DiffSynth-Studio.git
+   cd DiffSynth-Studio
+   pip install -e .
+   ```
+
+**Environment-specific examples:**
+
 For portable ComfyUI (python_embedded):
-git clone https://github.com/modelscope/DiffSynth-Studio.git  
+```bash
+git clone https://github.com/modelscope/DiffSynth-Studio.git
 cd DiffSynth-Studio
-C:\full\path\to\ComfyUI_Portable\python_embedded\python.exe -m pip install -e .
+C:\path\to\ComfyUI_Portable\python_embedded\python.exe -m pip install -e .
+```
 
 For .venv ComfyUI (Windows):
-C:\full\path\to\ComfyUI\.venv\Scripts\activate.bat
-git clone https://github.com/modelscope/DiffSynth-Studio.git  
-cd DiffSynth-Studio
-pip install -e .
-
-For .venv ComfyUI (Linux):
-source /home/full/path/to/ComfyUI/.venv/bin/activate
-git clone https://github.com/modelscope/DiffSynth-Studio.git  
-cd DiffSynth-Studio
-pip install -e .
-
-For conda/mamba/etc. ComfyUI:
-conda activate name_of_your_comfyui_env
-git clone https://github.com/modelscope/DiffSynth-Studio.git  
-cd DiffSynth-Studio
-pip install -e .
-
-"I don't have those, but I have a terminal in ComfyUI"(bottom right):
-git clone https://github.com/modelscope/DiffSynth-Studio.git  
+```cmd
+C:\path\to\ComfyUI\.venv\Scripts\activate.bat
+git clone https://github.com/modelscope/DiffSynth-Studio.git
 cd DiffSynth-Studio
 pip install -e .
 ```
 
+For .venv ComfyUI (Linux/Mac):
+```bash
+source /path/to/ComfyUI/.venv/bin/activate
+git clone https://github.com/modelscope/DiffSynth-Studio.git
+cd DiffSynth-Studio
+pip install -e .
+```
 
-### Via ComfyUI Manager (Recommended):
-> **Note:** I'm relatively new to this so let me know if it has issues please.
-1. Open ComfyUI Manager
-2. Click on the "Install via  Git URL" button
-3. Paste the URL: https://github.com/by-ae/ae-in-workflow.git
-4. Click on the "Install" button
-5. Restart ComfyUI
+For conda/mamba:
+```bash
+conda activate your_comfyui_env
+git clone https://github.com/modelscope/DiffSynth-Studio.git
+cd DiffSynth-Studio
+pip install -e .
+```
 
-### Manual Installation:
-> **Note:** The below commands are to be run via the terminal within ComfyUI if you have it or via the activated venv or mamba/conda/etc. environment.
-> CD into the folder and git clone https://github.com/by-ae/ae-in-workflow.git
-1. Clone (or download and extract) this repository into your ComfyUI `custom_nodes` directory:
-   ```
-   ComfyUI/
-   ├── custom_nodes/ <- clone here
-   │   └── ae-in-workflow/
-   │       ├── __init__.py
-   │       ├── pose_editor.py
-   │       ├── setup.py
-   │       ├── requirements.txt
-   │       ├── pyproject.toml
-   │       ├── CHANGELOG.md
-   │       ├── LICENSE
-   │       ├── MANIFEST.in
-   │       ├── README.md
-   │       ├── assets/
-   │       │   └── screenshot.png
-   │       └── web/
-   │           └── index.html
-   ```
-2. Install the requirements:
-   ```
+### Manual Installation (Alternative)
+1. Clone this repository into your ComfyUI `custom_nodes` directory:
+   ```bash
+   cd ComfyUI/custom_nodes
+   git clone https://github.com/by-ae/ae-in-workflow.git
+   cd ae-in-workflow
    pip install -r requirements.txt
    ```
-
-3. Restart ComfyUI
+2. Restart ComfyUI
 
 ## 🔧 Requirements
 
-> **Note:** When you run `pip install -r requirements.txt` from within your ComfyUI virtual environment, these packages will be installed automatically.
+Automatically installed by `pip install -r requirements.txt`:
 
-### Core Dependencies
 ```txt
 pygame>=2.0.0          # Interactive pose editor UI
 torch>=1.9.0           # PyTorch for ML operations
 numpy>=1.19.0          # Numerical computing
 Pillow>=8.0.0          # Image processing
+safetensors>=0.4.0     # Safe tensor serialization
 screeninfo>=0.8.0      # Optional: improves window positioning
 ```
 
-### Z-Image - Images To LoRA Dependencies
-```txt
-safetensors>=0.4.0     # Safe tensor serialization
-# diffsynth-studio      # Install via: https://github.com/modelscope/DiffSynth-Studio
-```
-
-> **Important:** For Z-Image - Images To LoRA functionality, you must install DiffSynth-Studio separately following their installation guide at https://github.com/modelscope/DiffSynth-Studio
+**Optional:** For Z-Image - Images To LoRA, install [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio) separately (see installation steps above).
 
 ## 🎨 Nodes
 
