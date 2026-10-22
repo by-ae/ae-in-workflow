@@ -1,5 +1,5 @@
 # Check for DiffSynth-Studio availability
-from typing import Any
+from typing import Any, List, Tuple, Optional
 
 
 try:
@@ -27,7 +27,42 @@ except ImportError:
 # Overall availability
 ZIMAGE_AVAILABLE = DIFF_SYNTH_AVAILABLE and DEPENDENCIES_AVAILABLE
 
-def merge_lora_weighted_average(loras, weights):
+from typing import Any, List, Tuple, Optional
+import re
+import os
+
+
+def sanitize_lora_name(name: str) -> str:
+    """Convert to lowercase and replace spaces/special chars with underscores
+    
+    Args:
+        name: Raw lora name string
+        
+    Returns:
+        Sanitized lora name safe for use in filenames
+    """
+    name = re.sub(r'[^a-zA-Z0-9\s]', '', name).lower()
+    name = re.sub(r'\s+', '_', name)
+    return name
+
+def find_next_version(base_path: str) -> str:
+    """Find the next available version number (000, 001, 002, etc.)
+    
+    Args:
+        base_path: Base path for the lora file (without version suffix)
+        
+    Returns:
+        Three-digit version string (e.g. '000', '001')
+    """
+    version = 0
+    while True:
+        version_str = f"{version:03d}"
+        test_path = f"{base_path}_v{version_str}.safetensors"
+        if not os.path.exists(test_path):
+            return version_str
+        version += 1
+
+def merge_lora_weighted_average(loras: List[dict], weights: List[float]) -> dict:
     """Average LoRAs with weights instead of concatenating - memory-efficient version"""
     if not loras:
         return {}

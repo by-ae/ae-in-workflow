@@ -7,6 +7,7 @@ import math
 import time
 import json
 import threading
+from typing import Tuple, List, Optional
 
 def load_images_from_folder(folder_path):
     """Load all image files from folder"""
@@ -128,8 +129,18 @@ def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, 
     thread.start()
     return thread
 
-def hex_to_rgb(hex_color):
-    """Convert hex color string to RGB tuple"""
+def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
+    """Convert hex color string to RGB tuple
+    
+    Args:
+        hex_color: Hex color string (e.g. '#FF0000' or '#F00')
+        
+    Returns:
+        Tuple of (red, green, blue) values (0-255)
+        
+    Raises:
+        ValueError: If hex_color is not a valid hex color string
+    """
     hex_color = hex_color.lstrip('#')
     return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
