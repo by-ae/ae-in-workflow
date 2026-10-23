@@ -572,14 +572,39 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         print(f"Error parsing input data: {e}")
         return None, None
 
+    # Validate people data
+    if not people_data:
+        print("Error: No people found in pose data")
+        return None, None
+
     # Initialize data for each person
     people_keypoints = []
     people_valid_keypoints = []
     people_original_confidences = []  # Store original confidence values
 
-    for person in people_data:
+    for person_idx, person in enumerate(people_data):
+        # Validate person structure
+        if "pose_keypoints_2d" not in person:
+            print(f"Error: Person {person_idx} missing 'pose_keypoints_2d' field")
+            return None, None
+        
         pose = person["pose_keypoints_2d"]
+        
+        # Validate pose data format
+        if not isinstance(pose, list):
+            print(f"Error: Person {person_idx} pose_keypoints_2d must be a list, got {type(pose).__name__}")
+            return None, None
+        
+        if len(pose) % 3 != 0:
+            print(f"Error: Person {person_idx} pose_keypoints_2d length must be divisible by 3, got {len(pose)}")
+            return None, None
+        
         n_points = len(pose) // 3
+        
+        if n_points == 0:
+            print(f"Error: Person {person_idx} has no keypoints (empty pose_keypoints_2d)")
+            return None, None
+        
         keypoints = [[pose[3*i], pose[3*i+1]] for i in range(n_points)]
         confidences = [pose[3*i+2] for i in range(n_points)]  # Store original confidences
         # Valid keypoints must be both at non-zero position AND have confidence > 0
