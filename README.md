@@ -277,6 +277,34 @@ This node crops images based on mask boundaries, with two modes for different us
 
 An interactive pose editor that allows users to manipulate OpenPose keypoints with full control.
 
+#### Inputs:
+- **pose_data** (optional): OpenPose format pose data. If None, creates a default T-pose
+  - Format: `[{"people": [{"pose_keypoints_2d": [x1, y1, conf1, x2, y2, conf2, ...]}]}]`
+  - Each person has 18 keypoints (nose, neck, shoulders, elbows, wrists, hips, knees, ankles, eyes, ears)
+  - Confidence values: 0.0 = missing/hidden, > 0.0 = visible
+- **padding** (optional): Padding in pixels around the pose in output image (default: 100)
+- **x, y, w, h** (optional): Initial window position and size (default: 20, 20, 1024, 1024)
+- **reset_cached_window_position** (optional): Reset window position to defaults (default: False)
+
+#### Outputs:
+- **image**: Rendered pose as tensor (1, H, W, 3) cropped to pose bounds with padding
+- **pose_data**: Updated pose data in same format as input, ready for saving/caching
+
+#### Key Features:
+- **Smart Caching**: Automatically caches your edits based on input pose hash - next time you load the same pose, your edits are restored
+- **Multi-Person Support**: Add (Ctrl+N), duplicate (Ctrl+D), delete (Ctrl+X) people in the scene
+- **Auto-Fix**: Press Ctrl+F to estimate missing keypoints using T-pose proportions
+- **Undo/Redo**: Full undo/redo support (Ctrl+Z, Ctrl+Shift+Z/Ctrl+Y)
+- **Reset**: Press Ctrl+O to reset to original input pose
+- **Window Memory**: Window position and size are remembered between sessions
+
+#### Usage Notes:
+- **Initial Input**: Can accept pose from OpenPose preprocessor, ControlNet, or start from scratch (None = T-pose)
+- **Validation**: Input pose data is validated - returns None if malformed (empty people, missing fields, wrong format)
+- **Coordinate System**: Uses standard OpenPose 18-keypoint format (BODY_25 subset)
+- **Confidence Values**: Only keypoints with confidence > 0.0 are visible and editable
+- **Output Format**: Compatible with ControlNet and other pose-processing nodes
+
 ## Usage Examples
 
 ### ✂️ Mask-Based Image Cropping
