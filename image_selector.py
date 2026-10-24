@@ -149,11 +149,14 @@ def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     
     hex_color = hex_color.lstrip('#')
     
-    # Validate length (must be 6 for #RRGGBB format)
-    if len(hex_color) != 6:
-        raise ValueError(f"hex_color must be 6 characters after '#', got {len(hex_color)}: #{hex_color}")
+    # Validate length (3 for #RGB or 6 for #RRGGBB)
+    if len(hex_color) == 3:
+        # Expand 3-char format: #RGB -> #RRGGBB
+        hex_color = ''.join(c * 2 for c in hex_color)
+    elif len(hex_color) != 6:
+        raise ValueError(f"hex_color must be 3 or 6 characters after '#', got {len(hex_color)}: #{hex_color}")
     
-    # Validate hex characters
+    # Validate hex characters and convert
     try:
         return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
     except ValueError as e:
