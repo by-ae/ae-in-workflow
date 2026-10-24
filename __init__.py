@@ -748,13 +748,9 @@ class CropImageBatchToMaskBoundsNodeAE:
 
         # Use forced bounds or calculated bounds
         if forced_bounds:
-            crop_height, crop_width = forced_bounds
             # Use full image bounds for cropping
             global_min_y, global_max_y = 0, height
             global_min_x, global_max_x = 0, width
-        else:
-            crop_height = global_max_y - global_min_y
-            crop_width = global_max_x - global_min_x
 
         # Crop all processed images and original masks to these bounds
         cropped_images = []
