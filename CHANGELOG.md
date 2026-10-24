@@ -5,6 +5,13 @@ All notable changes to **ae-in-workflow** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Z-Image Image-to-LoRA crash**: Fixed `TypeError: type 'zip' is not subscriptable` when using `reduce_size_factor > 1`
+- **Z-Image duplicate code**: Removed duplicate function definitions and imports in zimage_i2l.py
+- **Mutable default argument**: Fixed mutable default `lora_weights=[]` in `process_images_to_lora`
+
 ## [0.1.1] - 2024-12-XX
 
 ### Added

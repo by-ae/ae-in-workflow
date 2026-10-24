@@ -57,4 +57,4 @@ jobs:
       
       - name: Run tests
         run: |
-          pytest tests/ --cov=. --cov-report=term-missing -v || echo "No tests found yet"
+          pytest tests/ --cov=. --cov-report=term-missing -v

@@ -1,5 +1,7 @@
 # Check for DiffSynth-Studio availability
-from typing import Any, List, Tuple, Optional
+from typing import Any, List, Tuple, Optional, Callable
+import re
+import os
 
 
 try:
@@ -17,8 +19,6 @@ try:
     from safetensors.torch import save_file
     import torch
     from PIL import Image
-    import os
-    import re
     import folder_paths
     DEPENDENCIES_AVAILABLE = True
 except ImportError:
@@ -26,10 +26,6 @@ except ImportError:
 
 # Overall availability
 ZIMAGE_AVAILABLE = DIFF_SYNTH_AVAILABLE and DEPENDENCIES_AVAILABLE
-
-from typing import Any, List, Tuple, Optional
-import re
-import os
 
 
 def sanitize_lora_name(name: str) -> str:
@@ -62,6 +58,61 @@ def find_next_version(base_path: str) -> str:
             return version_str
         version += 1
 
+
+def reduce_loras_by_batching(
+    loras: List[Any],
+    weights: List[float],
+    factor: int,
+    merge_fn: Callable[[List[Any], List[float]], Any]
+) -> Tuple[List[Any], List[float]]:
+    """Reduce size by averaging LoRAs in batches of similar weights.
+    
+    This is a pure function that does not depend on DiffSynth being installed.
+    
+    Args:
+        loras: List of LoRA objects to batch
+        weights: Corresponding weights for each LoRA
+        factor: Batch size (number of LoRAs to merge together)
+        merge_fn: Function to merge a batch of loras with weights
+        
+    Returns:
+        Tuple of (batched_loras, batched_weights)
+    """
+    if not loras:
+        return [], []
+    
+    if factor <= 1:
+        return loras, weights
+    
+    # Sort by weight descending to group similar weights together
+    sorted_pairs = sorted(zip(weights, loras), key=lambda x: x[0], reverse=True)
+    sorted_weights, sorted_loras = zip(*sorted_pairs)
+    
+    batch_size = factor
+    num_loras = len(sorted_loras)
+    
+    batched_loras = []
+    batched_weights = []
+    
+    for i in range(0, num_loras, batch_size):
+        batch_end = min(i + batch_size, num_loras)
+        batch_loras = list(sorted_loras[i:batch_end])
+        batch_weights = list(sorted_weights[i:batch_end])
+        
+        if len(batch_loras) == 1:
+            # Single LoRA passes through unchanged
+            batched_loras.append(batch_loras[0])
+            batched_weights.append(batch_weights[0])
+        else:
+            # Merge batch using provided merge function
+            averaged_lora = merge_fn(batch_loras, batch_weights)
+            batched_loras.append(averaged_lora)
+            # Preserve total batch strength (sum, not avg) for consistency
+            batched_weights.append(sum(batch_weights))
+    
+    return batched_loras, batched_weights
+
+
 def merge_lora_weighted_average(loras: List[dict], weights: List[float]) -> dict:
     """Average LoRAs with weights instead of concatenating - memory-efficient version"""
     if not loras:
@@ -72,7 +123,8 @@ def merge_lora_weighted_average(loras: List[dict], weights: List[float]) -> dict
     
     # Precompute sum of weights once (scalar)
     sum_weights = sum(weights)
-    if sum_weights <= 0:
+    use_uniform = sum_weights <= 0
+    if use_uniform:
         sum_weights = len(weights)  # fallback to uniform
     
     for key in keys:
@@ -84,29 +136,19 @@ def merge_lora_weighted_average(loras: List[dict], weights: List[float]) -> dict
         merged[lora_B_key] = torch.zeros_like(first_B)
         
         for i, lora in enumerate(loras):
-            w = weights[i]
-            if w != 0:
+            if use_uniform:
+                # Uniform weight: 1.0 / len(weights)
+                scale = 1.0 / sum_weights
+            else:
+                w = weights[i]
+                if w == 0:
+                    continue
                 scale = w / sum_weights
-                merged[key] += lora[key] * scale
-                merged[lora_B_key] += lora[lora_B_key] * scale
+            merged[key] += lora[key] * scale
+            merged[lora_B_key] += lora[lora_B_key] * scale
     
     return merged
 
-def sanitize_lora_name(name):
-    """Convert to lowercase and replace spaces/special chars with underscores"""
-    name = re.sub(r'[^a-zA-Z0-9\s]', '', name).lower()
-    name = re.sub(r'\s+', '_', name)
-    return name
-
-def find_next_version(base_path):
-    """Find the next available version number (000, 001, 002, etc.)"""
-    version = 0
-    while True:
-        version_str = f"{version:03d}"
-        test_path = f"{base_path}_v{version_str}.safetensors"
-        if not os.path.exists(test_path):
-            return version_str
-        version += 1
 
 if DIFF_SYNTH_AVAILABLE:
     class CustomZImageUnit_Image2LoRADecode(ZImageUnit_Image2LoRADecode):
@@ -164,37 +206,16 @@ if DIFF_SYNTH_AVAILABLE:
         
         def _reduce_size_by_batching(self, loras, weights):
             """Reduce size by averaging LoRAs in batches of similar weights"""
-            if self.reduce_size_factor <= 1:
-                return loras, weights
-            
-            # SMART SORTING: Group similar weights together
-            sorted_pairs = sorted(zip(weights, loras), key=lambda x: x[0], reverse=True)
-            sorted_weights, sorted_loras = zip[tuple[Any, ...]](*sorted_pairs)
-            
-            batch_size = self.reduce_size_factor
-            num_loras = len(sorted_loras)
-            
-            batched_loras = []
-            batched_weights = []
-            
-            for i in range(0, num_loras, batch_size):
-                batch_end = min(i + batch_size, num_loras)
-                batch_loras = sorted_loras[i:batch_end]
-                batch_weights = list(sorted_weights[i:batch_end])
-                
-                if len(batch_loras) == 1:
-                    batched_loras.append(batch_loras[0])
-                    batched_weights.append(batch_weights[0])
-                else:
-                    averaged_lora = merge_lora_weighted_average(batch_loras, batch_weights)
-                    batched_loras.append(averaged_lora)
-                    # Preserve total batch strength (sum, not avg) for consistency
-                    batched_weights.append(sum(batch_weights))
-            
-            print(f"Smart size reduction: {num_loras} → {len(batched_loras)} LoRAs (factor: {self.reduce_size_factor})")
+            batched_loras, batched_weights = reduce_loras_by_batching(
+                loras, weights, self.reduce_size_factor, merge_lora_weighted_average
+            )
+            if len(batched_loras) < len(loras):
+                print(f"Smart size reduction: {len(loras)} → {len(batched_loras)} LoRAs (factor: {self.reduce_size_factor})")
             return batched_loras, batched_weights
 
-    def process_images_to_lora(images_tensor, lora_name, batch_size, lora_weights=[], normalized_strength=1.0, reduce_size_factor=1):
+    def process_images_to_lora(images_tensor, lora_name, batch_size, lora_weights=None, normalized_strength=1.0, reduce_size_factor=1):
+        if lora_weights is None:
+            lora_weights = []
         # Convert tensor to PIL images (assuming shape N, H, W, 3)
         images = []
         for i in range(images_tensor.shape[0]):
@@ -282,7 +303,9 @@ if DIFF_SYNTH_AVAILABLE:
         return save_location_with_version
 else:
     # Stub implementations when DiffSynth-Studio is not available
-    def process_images_to_lora(images_tensor, lora_name, batch_size, lora_weights=[], normalized_strength=1.0, reduce_size_factor=1):
+    def process_images_to_lora(images_tensor, lora_name, batch_size, lora_weights=None, normalized_strength=1.0, reduce_size_factor=1):
+        if lora_weights is None:
+            lora_weights = []
         raise ImportError("DiffSynth-Studio is not installed. Please install it following the instructions at https://github.com/modelscope/DiffSynth-Studio")
 
 # Module exports for ComfyUI node
