@@ -274,3 +274,69 @@ def test_crop_node_batch_consistency():
     for i in range(1, 3):
         assert result_images[i].shape == result_images[0].shape
         assert result_masks[i].shape == result_masks[0].shape
+
+
+def test_crop_node_mismatched_batch_size():
+    """Test error handling for mismatched batch sizes"""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+    import torch
+    import pytest
+    
+    node = CropImageBatchToMaskBoundsNodeAE()
+    
+    # Mismatched batch sizes
+    images = torch.zeros(3, 64, 64, 3)
+    masks = torch.zeros(2, 64, 64)  # Different batch size
+    
+    with pytest.raises(ValueError, match="same batch size"):
+        node.crop_to_mask_bounds(images, masks)
+
+
+def test_crop_node_mismatched_spatial_dimensions():
+    """Test error handling for mismatched spatial dimensions"""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+    import torch
+    import pytest
+    
+    node = CropImageBatchToMaskBoundsNodeAE()
+    
+    # Mismatched spatial dimensions
+    images = torch.zeros(2, 64, 64, 3)
+    masks = torch.zeros(2, 32, 32)  # Different spatial size
+    
+    with pytest.raises(ValueError, match="same spatial dimensions"):
+        node.crop_to_mask_bounds(images, masks)
+
+
+def test_crop_node_invalid_tensor_types():
+    """Test error handling for invalid tensor types"""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+    import torch
+    import pytest
+    
+    node = CropImageBatchToMaskBoundsNodeAE()
+    
+    # Non-tensor images
+    with pytest.raises(ValueError, match="must be a torch.Tensor"):
+        node.crop_to_mask_bounds("not a tensor", torch.zeros(2, 64, 64))
+    
+    # Non-tensor masks
+    with pytest.raises(ValueError, match="must be a torch.Tensor"):
+        node.crop_to_mask_bounds(torch.zeros(2, 64, 64, 3), "not a tensor")
+
+
+def test_crop_node_invalid_tensor_shapes():
+    """Test error handling for invalid tensor shapes"""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+    import torch
+    import pytest
+    
+    node = CropImageBatchToMaskBoundsNodeAE()
+    
+    # Wrong image dimensions (3D instead of 4D)
+    with pytest.raises(ValueError, match="images must be 4D"):
+        node.crop_to_mask_bounds(torch.zeros(2, 64, 64), torch.zeros(2, 64, 64))
+    
+    # Wrong mask dimensions (2D instead of 3D)
+    with pytest.raises(ValueError, match="masks must be 3D"):
+        node.crop_to_mask_bounds(torch.zeros(2, 64, 64, 3), torch.zeros(64, 64))

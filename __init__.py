@@ -491,6 +491,25 @@ class CropImageBatchToMaskBoundsNodeAE:
         Returns:
             tuple: (cropped_images, cropped_masks)
         """
+        # Validate tensor shapes and batch sizes
+        if not isinstance(images, torch.Tensor):
+            raise ValueError(f"images must be a torch.Tensor, got {type(images).__name__}")
+        
+        if not isinstance(masks, torch.Tensor):
+            raise ValueError(f"masks must be a torch.Tensor, got {type(masks).__name__}")
+        
+        if len(images.shape) != 4:
+            raise ValueError(f"images must be 4D (B, H, W, C), got shape {images.shape}")
+        
+        if len(masks.shape) != 3:
+            raise ValueError(f"masks must be 3D (B, H, W), got shape {masks.shape}")
+        
+        if images.shape[0] != masks.shape[0]:
+            raise ValueError(f"images and masks must have same batch size, got images: {images.shape[0]}, masks: {masks.shape[0]}")
+        
+        if images.shape[1] != masks.shape[1] or images.shape[2] != masks.shape[2]:
+            raise ValueError(f"images and masks must have same spatial dimensions, got images: ({images.shape[1]}, {images.shape[2]}), masks: ({masks.shape[1]}, {masks.shape[2]})")
+        
         # Validate inputs
         if mode not in ["mask_for_each", "sum_of_masks"]:
             raise ValueError(f"mode must be 'mask_for_each' or 'sum_of_masks', got: {mode}")
