@@ -45,6 +45,10 @@ def create_thumbnail(img, size):
         new_height = size[1]
         new_width = int(size[1] * img_ratio)
 
+    # Ensure dimensions are at least 1 pixel (prevent resize errors with extreme aspect ratios)
+    new_width = max(1, new_width)
+    new_height = max(1, new_height)
+
     return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
 # Cache management
@@ -276,7 +280,23 @@ def sort_images(images, paths, sort_mode, ascending=True):
     return sorted_images, sorted_paths
 
 def pil_to_tensor(img):
-    """Convert PIL image to torch tensor (1,H,W,3)"""
+    """Convert PIL image to torch tensor (1,H,W,3)
+    
+    Args:
+        img: PIL Image object
+        
+    Returns:
+        tuple: (image_tensor, mask_tensor)
+        
+    Raises:
+        ValueError: If img is None or not a PIL Image
+    """
+    if img is None:
+        raise ValueError("Image cannot be None")
+    
+    if not hasattr(img, 'mode'):
+        raise ValueError(f"Expected PIL Image, got {type(img).__name__}")
+    
     if img.mode == 'RGBA':
         # Handle transparency
         img_rgb = img.convert('RGB')
