@@ -325,6 +325,130 @@ def test_crop_node_invalid_tensor_types():
         node.crop_to_mask_bounds(torch.zeros(2, 64, 64, 3), "not a tensor")
 
 
+def test_crop_sum_of_masks_keeps_edge_pixels():
+    """sum_of_masks must include the last masked row and column."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    images = torch.zeros(1, 8, 8, 3)
+    images[0, :, :, 0] = 0.2
+    images[0, -1, :, 1] = 1.0
+    images[0, :, -1, 2] = 1.0
+    masks = torch.ones(1, 8, 8)
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    result_images, result_masks = node.crop_to_mask_bounds(
+        images, masks, mode="sum_of_masks", color_fill_mask=False
+    )
+
+    assert result_images.shape == (1, 8, 8, 3)
+    assert result_masks.shape == (1, 8, 8)
+    assert float(result_images[0, -1, 0, 1]) == 1.0
+    assert float(result_images[0, 0, -1, 2]) == 1.0
+    assert int((result_masks > 0.5).sum()) == 64
+
+
+def test_crop_sum_of_masks_partial_region_size():
+    """A 20x20 mask region crops to 20x20, not 19x19."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    images = torch.zeros(1, 100, 100, 3)
+    images[0, 20:40, 30:50, 0] = 1.0
+    masks = torch.zeros(1, 100, 100)
+    masks[0, 20:40, 30:50] = 1.0
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    result_images, result_masks = node.crop_to_mask_bounds(
+        images, masks, mode="sum_of_masks", color_fill_mask=False, optional_padding=0
+    )
+
+    assert result_images.shape == (1, 20, 20, 3)
+    assert int((result_masks > 0.5).sum()) == 400
+    assert float(result_images[0, 0, 0, 0]) == 1.0
+    assert float(result_images[0, -1, -1, 0]) == 1.0
+
+
+def test_crop_sum_of_masks_single_row_and_pixel():
+    """A one-row or one-pixel mask is a real region, not an empty mask."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+
+    images = torch.zeros(1, 100, 80, 3)
+    images[0, 5, 10:30, 0] = 1.0
+    masks = torch.zeros(1, 100, 80)
+    masks[0, 5, 10:30] = 1.0
+    result_images, result_masks = node.crop_to_mask_bounds(
+        images, masks, mode="sum_of_masks", color_fill_mask=False
+    )
+    assert result_images.shape == (1, 1, 20, 3)
+    assert int((result_masks > 0.5).sum()) == 20
+
+    images = torch.zeros(1, 50, 50, 3)
+    images[0, 7, 9] = torch.tensor([1.0, 0.0, 0.0])
+    masks = torch.zeros(1, 50, 50)
+    masks[0, 7, 9] = 1.0
+    result_images, _ = node.crop_to_mask_bounds(
+        images, masks, mode="sum_of_masks", color_fill_mask=False
+    )
+    assert result_images.shape == (1, 1, 1, 3)
+    assert torch.allclose(result_images[0, 0, 0], torch.tensor([1.0, 0.0, 0.0]))
+
+
+def test_crop_sum_of_masks_padding_is_exact_and_clamped():
+    """optional_padding grows the crop by that many pixels, stopping at the frame edge."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    images = torch.zeros(1, 100, 100, 3)
+    masks = torch.zeros(1, 100, 100)
+    masks[0, 40:60, 40:60] = 1.0
+
+    unpadded, _ = node.crop_to_mask_bounds(
+        images, masks, mode="sum_of_masks", optional_padding=0, color_fill_mask=False
+    )
+    padded, _ = node.crop_to_mask_bounds(
+        images, masks, mode="sum_of_masks", optional_padding=10, color_fill_mask=False
+    )
+    assert unpadded.shape == (1, 20, 20, 3)
+    assert padded.shape == (1, 40, 40, 3)
+
+    edge_images = torch.zeros(1, 20, 20, 3)
+    edge_masks = torch.zeros(1, 20, 20)
+    edge_masks[0, 0:2, 0:3] = 1.0
+    clamped, _ = node.crop_to_mask_bounds(
+        edge_images, edge_masks, mode="sum_of_masks", optional_padding=10, color_fill_mask=False
+    )
+    # Rows 0-1 plus 10 below = 12. Cols 0-2 plus 10 to the right = 13. Top/left stay at 0.
+    assert clamped.shape == (1, 12, 13, 3)
+
+
+def test_crop_mask_for_each_keeps_edge_pixels_and_full_empty_frame():
+    """mask_for_each keeps the masked edge and does not grow an empty mask by a pixel."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+
+    images = torch.zeros(1, 40, 40, 3)
+    images[0, 10:15, 8:12, 0] = 0.25
+    images[0, 14, 11, 1] = 1.0
+    masks = torch.zeros(1, 40, 40)
+    masks[0, 10:15, 8:12] = 1.0
+    result_images, result_masks = node.crop_to_mask_bounds(
+        images, masks, mode="mask_for_each", color_fill_mask=False
+    )
+    assert result_images.shape == (1, 5, 4, 3)
+    assert float(result_images[0, -1, -1, 1]) == 1.0
+    assert int((result_masks > 0.5).sum()) == 20
+
+    images = torch.ones(1, 30, 40, 3)
+    masks = torch.zeros(1, 30, 40)
+    result_images, result_masks = node.crop_to_mask_bounds(
+        images, masks, mode="mask_for_each", color_fill_mask=False
+    )
+    assert result_images.shape == (1, 30, 40, 3)
+    assert result_masks.shape == (1, 30, 40)
+
+
 def test_crop_node_invalid_tensor_shapes():
     """Test error handling for invalid tensor shapes"""
     from __init__ import CropImageBatchToMaskBoundsNodeAE
