@@ -315,14 +315,14 @@ class ImageSelectorNodeAE:
                     "min": 0,
                     "max": 4096,
                     "step": 1,
-                    "tooltip": "Target width for resized images (0 = auto-calculate from largest image)"
+                    "tooltip": "Target width for resized images. 0 = auto. If only width is set, height follows the largest image's aspect ratio."
                 }),
                 "target_height": ("INT", {
                     "default": 0,
                     "min": 0,
                     "max": 4096,
                     "step": 1,
-                    "tooltip": "Target height for resized images (0 = auto-calculate from largest image)"
+                    "tooltip": "Target height for resized images. 0 = auto. If only height is set, width follows the largest image's aspect ratio."
                 }),
                 "seed": ("INT", {
                     "default": 0,
