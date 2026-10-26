@@ -232,3 +232,59 @@ def test_lazy_image_loader():
     
     # Preload empty
     loader.preload_visible([])  # Should not crash
+
+
+def test_pil_to_tensor_non_rgb_modes():
+    """Palette, LA, 1-bit, and grayscale images become RGB tensors with a real mask."""
+    from image_selector import pil_to_tensor
+
+    indexed = Image.new('P', (5, 5), color=1)
+    indexed.putpalette([0, 0, 0, 10, 20, 30] + [0] * (768 - 6))
+    tensor, mask = pil_to_tensor(indexed)
+    assert tensor.shape == (1, 5, 5, 3)
+    assert torch.allclose(tensor[0, 0, 0], torch.tensor([10 / 255, 20 / 255, 30 / 255]), atol=1e-5)
+    assert torch.all(mask == 1.0)
+
+    la = Image.new('LA', (4, 4), color=(255, 64))
+    tensor, mask = pil_to_tensor(la)
+    assert tensor.shape == (1, 4, 4, 3)
+    assert torch.allclose(tensor[0, 0, 0], torch.tensor([1.0, 1.0, 1.0]), atol=1e-5)
+    assert torch.allclose(mask, torch.full((1, 4, 4), 64 / 255), atol=1e-4)
+
+    bitmap = Image.new('1', (4, 4), color=1)
+    tensor, mask = pil_to_tensor(bitmap)
+    assert tensor.shape == (1, 4, 4, 3)
+    assert torch.all(tensor == 1.0)
+    assert torch.all(mask == 1.0)
+
+    gray = Image.new('L', (8, 6), color=200)
+    tensor, mask = pil_to_tensor(gray)
+    assert tensor.shape == (1, 6, 8, 3)
+    assert torch.allclose(tensor[0, 0, 0], torch.tensor([200 / 255, 200 / 255, 200 / 255]), atol=1e-5)
+
+
+def test_process_selected_images_extreme_aspect_and_target_sides():
+    """Very wide images resize, and a single target side is honored."""
+    from image_selector import process_selected_images
+
+    wide = Image.new('RGB', (10000, 3), (0, 0, 255))
+    _, _, batch, _ = process_selected_images([wide], [0], None, None, '#000000')
+    assert batch.shape[0] == 1
+    assert batch.shape[1] >= 1
+    assert batch.shape[2] == 2048
+    assert batch.shape[3] == 3
+
+    photo = Image.new('RGB', (100, 50), 'red')
+    _, _, batch, _ = process_selected_images([photo], [0], 80, None, '#000000')
+    assert batch.shape == (1, 40, 80, 3)
+    _, _, batch, _ = process_selected_images([photo], [0], None, 40, '#000000')
+    assert batch.shape == (1, 40, 80, 3)
+    _, _, batch, _ = process_selected_images([photo], [0], 0, 0, '#000000')
+    assert batch.shape == (1, 50, 100, 3)
+    _, _, batch, _ = process_selected_images([photo], [0], 40, 20, '#000000')
+    assert batch.shape == (1, 20, 40, 3)
+
+    small = Image.new('RGB', (10, 10), 'red')
+    large = Image.new('RGB', (100, 50), 'blue')
+    _, _, batch, _ = process_selected_images([small, large], [0, 1], 80, None, '#000000')
+    assert batch.shape == (2, 40, 80, 3)
