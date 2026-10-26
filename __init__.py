@@ -126,14 +126,23 @@ class PoseEditorNodeAE:
             # Call the pose editor
             image_tensor, edited_pose_data = pose_editor(input_data, padding=padding, reset_cached_window_position=reset_cached_window_position)
 
+            if image_tensor is None or edited_pose_data is None:
+                raise ValueError(
+                    "Pose data is malformed. Expected a list of frames with a non-empty "
+                    "'people' list, and each person needs 'pose_keypoints_2d' as a non-empty "
+                    "list whose length is divisible by 3 (x, y, confidence)."
+                )
+
             return (image_tensor, edited_pose_data)
 
+        except ValueError:
+            raise
         except Exception as e:
             print(f"Pose Editor Error: {e}")
             import traceback
             traceback.print_exc()
 
-            # Return a minimal fallback
+            # Unexpected editor failure (for example no display). Malformed input raises above.
             fallback_tensor = torch.zeros(1, 64, 64, 3)
             return (fallback_tensor, POSE_KEYPOINT_optional)
 
@@ -908,65 +917,74 @@ class InterpolateFloatListNodeAE:
 
         Returns:
             tuple: (list of processed float values, comma-separated string of values)
-        """
-        try:
-            # Process the input string
-            # Replace newlines with commas
-            processed = floats.replace('\n', ',')
-            # Remove all whitespace
-            processed = ''.join(processed.split())
-            # Parse into float list, filtering out empty strings
-            values = [float(n) for n in processed.split(",") if n.strip() != ""]
 
-            # If count <= 0, return original list
-            if count <= 0:
-                rounded_values = [round(v, 6) for v in values]
+        Raises:
+            ValueError: If floats is not a string or contains a non-numeric token
+        """
+        if not isinstance(floats, str):
+            raise ValueError(
+                f"floats must be a comma-separated string of numbers, got {type(floats).__name__}"
+            )
+
+        # Replace newlines with commas, then drop whitespace. "1.0, 2.0" stays two numbers.
+        processed = floats.replace('\n', ',')
+        processed = ''.join(processed.split())
+        tokens = [n for n in processed.split(",") if n != ""]
+        values = []
+        invalid = []
+        for token in tokens:
+            try:
+                values.append(float(token))
+            except ValueError:
+                invalid.append(token)
+        if invalid:
+            shown = ", ".join(invalid[:5])
+            raise ValueError(
+                f"floats must be comma-separated numbers; could not parse: {shown}"
+            )
+
+        # If count <= 0, return original list
+        if count <= 0:
+            rounded_values = [round(v, 6) for v in values]
+            csv_string = ','.join(str(v) for v in rounded_values)
+            return (rounded_values, csv_string)
+
+        if interpolate_across_count:
+            # Interpolate across count items
+            if len(values) <= 1:
+                # Not enough values to interpolate, return repeated first value
+                rounded_values = [round(values[0], 6)] * count if values else [1.0] * count
                 csv_string = ','.join(str(v) for v in rounded_values)
                 return (rounded_values, csv_string)
-
-            if interpolate_across_count:
-                # Interpolate across count items
-                if len(values) <= 1:
-                    # Not enough values to interpolate, return repeated first value
-                    rounded_values = [round(values[0], 6)] * count if values else [1.0] * count
-                    csv_string = ','.join(str(v) for v in rounded_values)
-                    return (rounded_values, csv_string)
-                else:
-                    # Linear interpolation between values
-                    result = []
-                    for i in range(count):
-                        # Calculate position in original array
-                        pos = (i / max(1, count - 1)) * (len(values) - 1)
-                        lower_idx = int(pos)
-                        upper_idx = min(lower_idx + 1, len(values) - 1)
-                        fraction = pos - lower_idx
-
-                        # Interpolate between lower and upper values
-                        interpolated_value = values[lower_idx] + (values[upper_idx] - values[lower_idx]) * fraction
-                        result.append(round(interpolated_value, 6))
-
-                    csv_string = ','.join(str(v) for v in result)
-                    return (result, csv_string)
             else:
-                # Trim/pad with 1s to match count
-                if len(values) >= count:
-                    # Trim to count
-                    rounded_values = [round(v, 6) for v in values[:count]]
-                    csv_string = ','.join(str(v) for v in rounded_values)
-                    return (rounded_values, csv_string)
-                else:
-                    # Pad with 1s
-                    result = [round(v, 6) for v in values]  # Copy the list with rounding
-                    result.extend([1.0] * (count - len(values)))
-                    csv_string = ','.join(str(v) for v in result)
-                    return (result, csv_string)
+                # Linear interpolation between values
+                result = []
+                for i in range(count):
+                    # Calculate position in original array
+                    pos = (i / max(1, count - 1)) * (len(values) - 1)
+                    lower_idx = int(pos)
+                    upper_idx = min(lower_idx + 1, len(values) - 1)
+                    fraction = pos - lower_idx
 
-        except Exception as e:
-            print(f"Interpolate Float List Error: {e}")
-            import traceback
-            traceback.print_exc()
-            # Return empty list and empty string on error
-            return ([], "")
+                    # Interpolate between lower and upper values
+                    interpolated_value = values[lower_idx] + (values[upper_idx] - values[lower_idx]) * fraction
+                    result.append(round(interpolated_value, 6))
+
+                csv_string = ','.join(str(v) for v in result)
+                return (result, csv_string)
+        else:
+            # Trim/pad with 1s to match count
+            if len(values) >= count:
+                # Trim to count
+                rounded_values = [round(v, 6) for v in values[:count]]
+                csv_string = ','.join(str(v) for v in rounded_values)
+                return (rounded_values, csv_string)
+            else:
+                # Pad with 1s
+                result = [round(v, 6) for v in values]  # Copy the list with rounding
+                result.extend([1.0] * (count - len(values)))
+                csv_string = ','.join(str(v) for v in result)
+                return (result, csv_string)
 
 
 # Node registration

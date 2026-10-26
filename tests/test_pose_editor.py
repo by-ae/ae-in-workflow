@@ -180,6 +180,18 @@ def test_pose_editor_validation_wrong_type():
     assert result[1] is None
 
 
+def test_pose_node_rejects_malformed_pose():
+    """The node raises a clear error instead of handing ComfyUI a None image."""
+    from __init__ import PoseEditorNodeAE
+
+    node = PoseEditorNodeAE()
+    with pytest.raises(ValueError, match="Pose data is malformed"):
+        node.edit_pose(POSE_KEYPOINT_optional=[{"people": []}])
+
+    with pytest.raises(ValueError, match="pose_keypoints_2d"):
+        node.edit_pose(POSE_KEYPOINT_optional={"people": [{"pose_keypoints_2d": [1, 2]}]})
+
+
 def test_pose_editor_validation_empty_keypoints():
     """Test pose_editor handles empty keypoints array"""
     import pose_editor
