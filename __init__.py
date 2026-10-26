@@ -247,7 +247,7 @@ class ZImageImagesToLoRANodeAE:
         if not DEPENDENCIES_AVAILABLE:
             raise ImportError("You need to run `pip install -r requirements.txt` to install the required dependencies.\nRead the github for more info: https://github.com/by-ae/ae-in-workflow")
 
-        if model_management is not None:
+        if unload_models_before_running and model_management is not None:
             model_management.unload_all_models()
             model_management.soft_empty_cache(True)
         gc.collect()
