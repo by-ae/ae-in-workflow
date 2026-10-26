@@ -126,14 +126,23 @@ class PoseEditorNodeAE:
             # Call the pose editor
             image_tensor, edited_pose_data = pose_editor(input_data, padding=padding, reset_cached_window_position=reset_cached_window_position)
 
+            if image_tensor is None or edited_pose_data is None:
+                raise ValueError(
+                    "Pose data is malformed. Expected a list of frames with a non-empty "
+                    "'people' list, and each person needs 'pose_keypoints_2d' as a non-empty "
+                    "list whose length is divisible by 3 (x, y, confidence)."
+                )
+
             return (image_tensor, edited_pose_data)
 
+        except ValueError:
+            raise
         except Exception as e:
             print(f"Pose Editor Error: {e}")
             import traceback
             traceback.print_exc()
 
-            # Return a minimal fallback
+            # Unexpected editor failure (for example no display). Malformed input raises above.
             fallback_tensor = torch.zeros(1, 64, 64, 3)
             return (fallback_tensor, POSE_KEYPOINT_optional)
 
@@ -238,7 +247,7 @@ class ZImageImagesToLoRANodeAE:
         if not DEPENDENCIES_AVAILABLE:
             raise ImportError("You need to run `pip install -r requirements.txt` to install the required dependencies.\nRead the github for more info: https://github.com/by-ae/ae-in-workflow")
 
-        if model_management is not None:
+        if unload_models_before_running and model_management is not None:
             model_management.unload_all_models()
             model_management.soft_empty_cache(True)
         gc.collect()
@@ -315,14 +324,14 @@ class ImageSelectorNodeAE:
                     "min": 0,
                     "max": 4096,
                     "step": 1,
-                    "tooltip": "Target width for resized images (0 = auto-calculate from largest image)"
+                    "tooltip": "Target width for resized images. 0 = auto. If only width is set, height follows the largest image's aspect ratio."
                 }),
                 "target_height": ("INT", {
                     "default": 0,
                     "min": 0,
                     "max": 4096,
                     "step": 1,
-                    "tooltip": "Target height for resized images (0 = auto-calculate from largest image)"
+                    "tooltip": "Target height for resized images. 0 = auto. If only height is set, width follows the largest image's aspect ratio."
                 }),
                 "seed": ("INT", {
                     "default": 0,
@@ -460,7 +469,7 @@ class CropImageBatchToMaskBoundsNodeAE:
                 }),
                 "color_fill_mask": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Fill masked areas with padding color before processing"
+                    "tooltip": "Replace pixels outside the crop mask with padding_color before cropping. When invert_mask is on, fills the mask interior instead."
                 }),
             }
         }
@@ -597,23 +606,22 @@ class CropImageBatchToMaskBoundsNodeAE:
             if invert_mask:
                 bounds_mask = 1.0 - mask_np
 
-            # Find mask bounds
+            # Find inclusive mask bounds. An empty mask keeps the full frame.
             mask_binary = bounds_mask > 0.5
             if not mask_binary.any():
-                # Empty mask - use full image
-                min_y, max_y = 0, height
-                min_x, max_x = 0, width
+                min_y, max_y = 0, height - 1
+                min_x, max_x = 0, width - 1
             else:
                 rows = np.any(mask_binary, axis=1)
                 cols = np.any(mask_binary, axis=0)
-                min_y, max_y = np.where(rows)[0][[0, -1]]
-                min_x, max_x = np.where(cols)[0][[0, -1]]
+                min_y, max_y = (int(v) for v in np.where(rows)[0][[0, -1]])
+                min_x, max_x = (int(v) for v in np.where(cols)[0][[0, -1]])
 
-            # Add optional padding
+            # Add optional padding, clamped to the image so the end index stays inclusive.
             min_y = max(0, min_y - optional_padding)
-            max_y = min(height, max_y + optional_padding)
+            max_y = min(height - 1, max_y + optional_padding)
             min_x = max(0, min_x - optional_padding)
-            max_x = min(width, max_x + optional_padding)
+            max_x = min(width - 1, max_x + optional_padding)
 
             crop_height = max_y - min_y + 1
             crop_width = max_x - min_x + 1
@@ -622,9 +630,9 @@ class CropImageBatchToMaskBoundsNodeAE:
             all_crop_heights.append(crop_height)
             all_crop_widths.append(crop_width)
 
-            # Crop image and original mask (not the inverted one)
-            cropped_img = img_np[min_y:max_y, min_x:max_x]
-            cropped_mask = mask_np[min_y:max_y, min_x:max_x]  # Always use original mask
+            # Slice is exclusive at the end, so add 1 to keep the last masked row and column.
+            cropped_img = img_np[min_y:max_y + 1, min_x:max_x + 1]
+            cropped_mask = mask_np[min_y:max_y + 1, min_x:max_x + 1]  # Always use original mask
 
             cropped_images.append((cropped_img, crop_width, crop_height))
             cropped_masks.append((cropped_mask, crop_width, crop_height))
@@ -730,11 +738,11 @@ class CropImageBatchToMaskBoundsNodeAE:
             processed_images.append(img_np)
             processed_masks.append(mask_np)
 
-        # Find combined bounds across all masks
-        global_min_y = height
-        global_max_y = 0
-        global_min_x = width
-        global_max_x = 0
+        # Inclusive bounds across the batch. max starts below min so a single-row
+        # mask (min == max) is kept instead of being treated as empty.
+        found_bounds = False
+        global_min_y, global_max_y = 0, -1
+        global_min_x, global_max_x = 0, -1
 
         for i in range(batch_size):
             mask_np = processed_masks[i]
@@ -746,30 +754,32 @@ class CropImageBatchToMaskBoundsNodeAE:
             if mask_binary.any():
                 rows = np.any(mask_binary, axis=1)
                 cols = np.any(mask_binary, axis=0)
-                min_y, max_y = np.where(rows)[0][[0, -1]]
-                min_x, max_x = np.where(cols)[0][[0, -1]]
+                min_y, max_y = (int(v) for v in np.where(rows)[0][[0, -1]])
+                min_x, max_x = (int(v) for v in np.where(cols)[0][[0, -1]])
 
-                global_min_y = min(global_min_y, min_y)
-                global_max_y = max(global_max_y, max_y)
-                global_min_x = min(global_min_x, min_x)
-                global_max_x = max(global_max_x, max_x)
+                if not found_bounds:
+                    global_min_y, global_max_y = min_y, max_y
+                    global_min_x, global_max_x = min_x, max_x
+                    found_bounds = True
+                else:
+                    global_min_y = min(global_min_y, min_y)
+                    global_max_y = max(global_max_y, max_y)
+                    global_min_x = min(global_min_x, min_x)
+                    global_max_x = max(global_max_x, max_x)
 
-        # If no valid masks found, use full bounds
-        if global_min_y >= global_max_y:
-            global_min_y, global_max_y = 0, height
-            global_min_x, global_max_x = 0, width
+        if not found_bounds:
+            global_min_y, global_max_y = 0, height - 1
+            global_min_x, global_max_x = 0, width - 1
 
-        # Add optional padding
-        global_min_y = max(0, global_min_y - optional_padding)
-        global_max_y = min(height, global_max_y + optional_padding)
-        global_min_x = max(0, global_min_x - optional_padding)
-        global_max_x = min(width, global_max_x + optional_padding)
-
-        # Use forced bounds or calculated bounds
         if forced_bounds:
-            # Use full image bounds for cropping
-            global_min_y, global_max_y = 0, height
-            global_min_x, global_max_x = 0, width
+            # Caller already expanded the canvas; crop to that full frame.
+            global_min_y, global_max_y = 0, height - 1
+            global_min_x, global_max_x = 0, width - 1
+        else:
+            global_min_y = max(0, global_min_y - optional_padding)
+            global_max_y = min(height - 1, global_max_y + optional_padding)
+            global_min_x = max(0, global_min_x - optional_padding)
+            global_max_x = min(width - 1, global_max_x + optional_padding)
 
         # Crop all processed images and original masks to these bounds
         cropped_images = []
@@ -779,9 +789,9 @@ class CropImageBatchToMaskBoundsNodeAE:
             img_np = processed_images[i]
             mask_np = processed_masks[i]  # Always use original mask for output
 
-            # Crop
-            cropped_img = img_np[global_min_y:global_max_y, global_min_x:global_max_x]
-            cropped_mask = mask_np[global_min_y:global_max_y, global_min_x:global_max_x]
+            # End index is exclusive, so +1 keeps the last masked row and column.
+            cropped_img = img_np[global_min_y:global_max_y + 1, global_min_x:global_max_x + 1]
+            cropped_mask = mask_np[global_min_y:global_max_y + 1, global_min_x:global_max_x + 1]
 
             # Convert back to tensors
             img_tensor = torch.from_numpy(cropped_img).float() / 255.0
@@ -907,65 +917,74 @@ class InterpolateFloatListNodeAE:
 
         Returns:
             tuple: (list of processed float values, comma-separated string of values)
-        """
-        try:
-            # Process the input string
-            # Replace newlines with commas
-            processed = floats.replace('\n', ',')
-            # Remove all whitespace
-            processed = ''.join(processed.split())
-            # Parse into float list, filtering out empty strings
-            values = [float(n) for n in processed.split(",") if n.strip() != ""]
 
-            # If count <= 0, return original list
-            if count <= 0:
-                rounded_values = [round(v, 6) for v in values]
+        Raises:
+            ValueError: If floats is not a string or contains a non-numeric token
+        """
+        if not isinstance(floats, str):
+            raise ValueError(
+                f"floats must be a comma-separated string of numbers, got {type(floats).__name__}"
+            )
+
+        # Replace newlines with commas, then drop whitespace. "1.0, 2.0" stays two numbers.
+        processed = floats.replace('\n', ',')
+        processed = ''.join(processed.split())
+        tokens = [n for n in processed.split(",") if n != ""]
+        values = []
+        invalid = []
+        for token in tokens:
+            try:
+                values.append(float(token))
+            except ValueError:
+                invalid.append(token)
+        if invalid:
+            shown = ", ".join(invalid[:5])
+            raise ValueError(
+                f"floats must be comma-separated numbers; could not parse: {shown}"
+            )
+
+        # If count <= 0, return original list
+        if count <= 0:
+            rounded_values = [round(v, 6) for v in values]
+            csv_string = ','.join(str(v) for v in rounded_values)
+            return (rounded_values, csv_string)
+
+        if interpolate_across_count:
+            # Interpolate across count items
+            if len(values) <= 1:
+                # Not enough values to interpolate, return repeated first value
+                rounded_values = [round(values[0], 6)] * count if values else [1.0] * count
                 csv_string = ','.join(str(v) for v in rounded_values)
                 return (rounded_values, csv_string)
-
-            if interpolate_across_count:
-                # Interpolate across count items
-                if len(values) <= 1:
-                    # Not enough values to interpolate, return repeated first value
-                    rounded_values = [round(values[0], 6)] * count if values else [1.0] * count
-                    csv_string = ','.join(str(v) for v in rounded_values)
-                    return (rounded_values, csv_string)
-                else:
-                    # Linear interpolation between values
-                    result = []
-                    for i in range(count):
-                        # Calculate position in original array
-                        pos = (i / max(1, count - 1)) * (len(values) - 1)
-                        lower_idx = int(pos)
-                        upper_idx = min(lower_idx + 1, len(values) - 1)
-                        fraction = pos - lower_idx
-
-                        # Interpolate between lower and upper values
-                        interpolated_value = values[lower_idx] + (values[upper_idx] - values[lower_idx]) * fraction
-                        result.append(round(interpolated_value, 6))
-
-                    csv_string = ','.join(str(v) for v in result)
-                    return (result, csv_string)
             else:
-                # Trim/pad with 1s to match count
-                if len(values) >= count:
-                    # Trim to count
-                    rounded_values = [round(v, 6) for v in values[:count]]
-                    csv_string = ','.join(str(v) for v in rounded_values)
-                    return (rounded_values, csv_string)
-                else:
-                    # Pad with 1s
-                    result = [round(v, 6) for v in values]  # Copy the list with rounding
-                    result.extend([1.0] * (count - len(values)))
-                    csv_string = ','.join(str(v) for v in result)
-                    return (result, csv_string)
+                # Linear interpolation between values
+                result = []
+                for i in range(count):
+                    # Calculate position in original array
+                    pos = (i / max(1, count - 1)) * (len(values) - 1)
+                    lower_idx = int(pos)
+                    upper_idx = min(lower_idx + 1, len(values) - 1)
+                    fraction = pos - lower_idx
 
-        except Exception as e:
-            print(f"Interpolate Float List Error: {e}")
-            import traceback
-            traceback.print_exc()
-            # Return empty list and empty string on error
-            return ([], "")
+                    # Interpolate between lower and upper values
+                    interpolated_value = values[lower_idx] + (values[upper_idx] - values[lower_idx]) * fraction
+                    result.append(round(interpolated_value, 6))
+
+                csv_string = ','.join(str(v) for v in result)
+                return (result, csv_string)
+        else:
+            # Trim/pad with 1s to match count
+            if len(values) >= count:
+                # Trim to count
+                rounded_values = [round(v, 6) for v in values[:count]]
+                csv_string = ','.join(str(v) for v in rounded_values)
+                return (rounded_values, csv_string)
+            else:
+                # Pad with 1s
+                result = [round(v, 6) for v in values]  # Copy the list with rounding
+                result.extend([1.0] * (count - len(values)))
+                csv_string = ','.join(str(v) for v in result)
+                return (result, csv_string)
 
 
 # Node registration

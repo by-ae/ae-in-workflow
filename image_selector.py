@@ -297,15 +297,19 @@ def pil_to_tensor(img):
     if not hasattr(img, 'mode'):
         raise ValueError(f"Expected PIL Image, got {type(img).__name__}")
     
-    if img.mode == 'RGBA':
-        # Handle transparency
-        img_rgb = img.convert('RGB')
-        mask = np.array(img)[:, :, 3]  # Alpha channel
+    # Indexed, grayscale, CMYK, and 1-bit images are not RGB. Converting first
+    # keeps palette colors instead of treating the index as a gray value.
+    has_alpha = img.mode in ('RGBA', 'LA') or (
+        img.mode == 'P' and 'transparency' in img.info
+    )
+    if has_alpha:
+        img_rgba = img.convert('RGBA')
+        img_rgb = img_rgba.convert('RGB')
+        mask = np.array(img_rgba)[:, :, 3]
         mask_tensor = torch.from_numpy(mask).float() / 255.0
         mask_tensor = mask_tensor.unsqueeze(0)  # (1,H,W)
     else:
-        img_rgb = img
-        # Create all-white mask
+        img_rgb = img.convert('RGB')
         mask_tensor = torch.ones(1, img.height, img.width)
 
     # Convert to tensor (H,W,C) format
@@ -732,6 +736,41 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
     # Return indices of selected images in order they were clicked
     return selected_paths
 
+def resolve_target_dimensions(selected_images, target_width_param=None, target_height_param=None):
+    """Pick the output width and height for a selection.
+
+    Both sides set: use them. One side set: derive the other from the largest
+    image's aspect ratio. Neither set: fit the largest image with its long
+    side capped at 2048. Every returned side is at least 1 pixel.
+    """
+    areas = [img.width * img.height for img in selected_images]
+    reference = selected_images[areas.index(max(areas))]
+    ref_w = max(int(reference.width), 1)
+    ref_h = max(int(reference.height), 1)
+
+    width_set = target_width_param is not None and target_width_param > 0
+    height_set = target_height_param is not None and target_height_param > 0
+
+    if width_set and height_set:
+        return int(target_width_param), int(target_height_param)
+    if width_set:
+        target_width = int(target_width_param)
+        target_height = max(1, int(target_width * ref_h / ref_w))
+        return target_width, target_height
+    if height_set:
+        target_height = int(target_height_param)
+        target_width = max(1, int(target_height * ref_w / ref_h))
+        return target_width, target_height
+
+    if ref_w > ref_h:
+        target_width = min(2048, ref_w)
+        target_height = max(1, int(target_width * ref_h / ref_w))
+    else:
+        target_height = min(2048, ref_h)
+        target_width = max(1, int(target_height * ref_w / ref_h))
+    return target_width, target_height
+
+
 def process_selected_images(images, selected_indices, target_width_param=None, target_height_param=None, padding_color="#000000"):
     """Process selected images into required formats"""
     if not selected_indices:
@@ -751,27 +790,11 @@ def process_selected_images(images, selected_indices, target_width_param=None, t
         image_list.append(tensor)
         mask_list.append(mask)
 
-    # Determine target dimensions
-    if target_width_param and target_height_param and target_width_param > 0 and target_height_param > 0:
-        # Use provided target dimensions
-        target_width = target_width_param
-        target_height = target_height_param
-    else:
-        # Find largest area image for batch sizing (original logic)
-        areas = [(img.width * img.height) for img in selected_images]
-        max_area_idx = areas.index(max(areas))
-        target_img = selected_images[max_area_idx]
+    target_width, target_height = resolve_target_dimensions(
+        selected_images, target_width_param, target_height_param
+    )
 
-        # Calculate target size (max side 2048, maintain aspect ratio)
-        target_ratio = target_img.width / target_img.height
-        if target_img.width > target_img.height:
-            target_width = min(2048, target_img.width)
-            target_height = int(target_width / target_ratio)
-        else:
-            target_height = min(2048, target_img.height)
-            target_width = int(target_height * target_ratio)
-
-    # Resize all images to target size maintaining aspect ratio, pad with black
+    # Resize all images to target size maintaining aspect ratio, then pad
     resized_images = []
     resized_masks = []
 
@@ -783,17 +806,21 @@ def process_selected_images(images, selected_indices, target_width_param=None, t
         pil_img = Image.fromarray((img.numpy() * 255).astype(np.uint8))
 
         # Calculate scaling to fit within target dimensions while maintaining aspect ratio
-        img_ratio = pil_img.width / pil_img.height
+        img_ratio = pil_img.width / max(pil_img.height, 1)
         target_ratio = target_width / target_height
 
         if img_ratio > target_ratio:
             # Image is wider than target aspect ratio - fit by width
             new_width = target_width
-            new_height = int(target_width / img_ratio)
+            new_height = int(target_width / img_ratio) if img_ratio else target_height
         else:
             # Image is taller than target aspect ratio - fit by height
             new_height = target_height
             new_width = int(target_height * img_ratio)
+
+        # A very wide or tall image can round a side down to 0, which PIL will not resize.
+        new_width = min(target_width, max(1, new_width))
+        new_height = min(target_height, max(1, new_height))
 
         # Resize the image maintaining aspect ratio
         resized_pil = pil_img.resize((new_width, new_height), Image.Resampling.LANCZOS)

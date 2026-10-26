@@ -165,15 +165,22 @@ def test_interpolate_non_uniform_spacing():
 
 
 def test_interpolate_error_handling():
-    """Test error handling with invalid input"""
+    """Invalid tokens and non-strings raise a message that names the problem."""
     from __init__ import InterpolateFloatListNodeAE
     
     node = InterpolateFloatListNodeAE()
     
-    # Should return empty list and string on error
-    result_list, result_csv = node.interpolate_floats("invalid,data", count=3)
-    assert result_list == []
-    assert result_csv == ""
+    with pytest.raises(ValueError, match="could not parse: invalid, data"):
+        node.interpolate_floats("invalid,data", count=3)
+
+    with pytest.raises(ValueError, match="could not parse: abc"):
+        node.interpolate_floats("1.0, abc, 2.0", count=3)
+
+    with pytest.raises(ValueError, match="got NoneType"):
+        node.interpolate_floats(None, count=3)
+
+    with pytest.raises(ValueError, match="got list"):
+        node.interpolate_floats([1.0, 2.0], count=3)
 
 
 def test_interpolate_mixed_valid_invalid():

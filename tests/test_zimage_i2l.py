@@ -239,3 +239,40 @@ def test_process_images_to_lora_without_deps():
         
         assert "DiffSynth-Studio" in str(exc_info.value)
 
+
+def test_unload_models_before_running_is_honored(monkeypatch):
+    """The unload switch must be able to leave already loaded models in place."""
+    import __init__ as nodes
+
+    torch = pytest.importorskip("torch")
+
+    class FakeModelManagement:
+        def __init__(self):
+            self.unloaded = 0
+
+        def unload_all_models(self):
+            self.unloaded += 1
+
+        def soft_empty_cache(self, _force):
+            pass
+
+    fake = FakeModelManagement()
+    monkeypatch.setattr(nodes, "model_management", fake)
+    monkeypatch.setattr(nodes, "DIFF_SYNTH_AVAILABLE", True)
+    monkeypatch.setattr(nodes, "DEPENDENCIES_AVAILABLE", True)
+    monkeypatch.setattr(
+        nodes,
+        "process_images_to_lora",
+        lambda *args, **kwargs: "Z-Image/ae/z-image_test_v000.safetensors",
+    )
+
+    node = nodes.ZImageImagesToLoRANodeAE()
+    images = torch.zeros(1, 4, 4, 3)
+
+    kept = node.images_to_lora(images, "test", unload_models_before_running=False)
+    assert fake.unloaded == 0
+    assert kept == ("Z-Image/ae/z-image_test_v000.safetensors",)
+
+    node.images_to_lora(images, "test", unload_models_before_running=True)
+    assert fake.unloaded == 1
+

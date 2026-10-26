@@ -29,7 +29,7 @@ But if you need them to proc again, just change the seed value and it will run a
 
 **Interpolate Float List**: Process and interpolate comma-separated float lists.
 
-**Crop Image Batch to Mask Bounds**: Per image-mask pair mask-based cropping with optional forced output dimensions.
+**Crop Image Batch to Mask Bounds**: Crop each image-mask pair, or the whole batch, to mask bounds. Optional width and height expand the canvas before cropping.
 
 ## 🚀 Key Features
 
@@ -162,15 +162,16 @@ Convert images to LoRA (Low-Rank Adaptation) using the Z-Image pipeline from Dif
 - **lora_name** (required): Dataset name for the LoRA (default: "my_lora")
 - **batch_size** (optional): Images to process simultaneously (default: 8, higher = faster but more VRAM)
 - **lora_weights** (optional): Comma-separated weights for each image (e.g., "1.0,2.0,0.5") - leave empty for equal weighting
-- **normalized_strength** (optional): Target strength normalization for saved LoRA (default: 1.0)
+- **normalize_saved_lora_strength_to** (optional): Strength stored in the saved LoRA (default: 1.0). If a result only looked right at loader strength 1.75, set this to 1.75 and loader strength 1.0 matches that
 - **reduce_size_factor** (optional): Batch size for averaging LoRAs (default: 1, higher = smaller final LoRA by averaging groups)
+- **unload_models_before_running** (optional): Unload other ComfyUI models before running (default: True). Set this to False to leave them loaded
 - **seed** (optional): Change to force re-execution with same inputs (default: 0)
 
 #### Outputs:
-- **lora_path**: Relative path to generated LoRA file (e.g., "Z-Image/ae/z-image_my_lora_v000.safetensors")
+- **lora_path**: Path relative to the LoRA folder (e.g., "Z-Image/ae/z-image_my_lora_v000.safetensors")
 
 #### Usage Notes:
-- LoRA files are saved to: `models/loras/Z-Image/ae/z-image_<name>_vXXX.safetensors`
+- The file is saved in the first LoRA folder ComfyUI has configured, at `Z-Image/ae/z-image_<name>_vXXX.safetensors`. On a default ComfyUI layout that folder is `models/loras/`
 - Connect the output directly to LoraLoaderModelOnly "lora_name" input
 - Requires DiffSynth-Studio (install via instructions at https://github.com/modelscope/DiffSynth-Studio)
 
@@ -203,9 +204,10 @@ Mouse Wheel: Scroll through images (right) or folders (left)
 ```
 
 #### Inputs:
-- **folder_path** (required): Path to folder containing images
-- **target_width** (optional): Target width for resized images (0 = auto)
-- **target_height** (optional): Target height for resized images (0 = auto)
+- **folder_path** (required): Path to a folder of images, or a folder to start browsing from
+- **target_width** (optional): Output width in pixels (default: 0). 0 leaves width automatic
+- **target_height** (optional): Output height in pixels (default: 0). 0 leaves height automatic
+- **padding_color** (optional): Hex color used to pad images that do not fill the canvas, `#RGB` or `#RRGGBB` (default: `#000000`)
 - **seed** (optional): Change to force re-execution with same inputs (default: 0)
 
 #### Outputs:
@@ -214,15 +216,15 @@ Mouse Wheel: Scroll through images (right) or folders (left)
 - **batch_count**: Number of images in the batch
 
 #### Usage Notes:
-- **Supported Formats**: PNG, JPG, JPEG, BMP, TIFF, WebP
+- **Supported Formats**: PNG, JPG, JPEG, BMP, TIFF, WebP (those file extensions)
 - **Asynchronous Loading**: Folders load in background with loading indicator - no UI freezing even with 1000+ images
 - **Lazy Loading**: Images are loaded on-demand with intelligent caching for smooth scrolling
 - **Memory Management**: Only visible images are kept in memory with automatic cleanup
 - **Folder Navigation**: Tree panel allows instant navigation between folders with async loading
 - **Performance**: Handles enormous folders efficiently with 1-image-per-frame loading limits
-- **Pre-padding**: Optionally pad all images to consistent dimensions before mask processing
-- **Image Processing**: Images are resized maintaining aspect ratio with custom padding color
-- **Mask Processing**: Intelligent cropping based on mask bounds with aspect ratio preservation
+- **Sizing**: With both targets at 0, the canvas follows the largest selected image and the long side is capped at 2048. Set both width and height to use that exact canvas. Set only one of them and the other side follows that image's aspect ratio
+- **Image Processing**: Each selected image is scaled to fit inside the canvas, keeping its aspect ratio, then padded with `padding_color`. Palette, grayscale, 1-bit, and other modes are converted to RGB first, so indexed colors stay correct
+- **Masks**: An image with an alpha channel (RGBA, LA, or a transparent palette image) outputs that alpha. Other images get a fully opaque mask. Padded pixels are 0 in the mask
 - **Sorting**: Multiple sort options (Name, Size, Modified date, Created date, Dimensions) with persistent settings
 - **Selection**: Click thumbnails to select/deselect, Ctrl+A to select/deselect all
 - **UI Enhancements**: All text has black outlines for readability on dark backgrounds
@@ -256,18 +258,21 @@ This node crops images based on mask boundaries, with two modes for different us
 - **mode** (optional): Cropping mode - "mask_for_each" or "sum_of_masks" (default: "mask_for_each")
 - **padding_color** (optional): Hex color for padding areas (default: "#000000")
 - **optional_padding** (optional): Extra padding pixels around cropped areas (default: 0)
-- **optional_new_width** (optional): Pad images to this width before processing (default: 0)
-- **optional_new_height** (optional): Pad images to this height before processing (default: 0)
+- **optional_new_width** (optional): Minimum canvas width before cropping (default: 0, which keeps the current width). The canvas grows when the image is narrower than this
+- **optional_new_height** (optional): Minimum canvas height before cropping (default: 0, which keeps the current height). The canvas grows when the image is shorter than this
+- **color_fill_mask** (optional): When on (default), pixels below mask value 0.5 are replaced with `padding_color` before the crop. With `invert_mask` on, pixels above 0.5 are filled instead
 
 #### Outputs:
 - **images**: Cropped and resized images with consistent dimensions
 - **masks**: Corresponding masks cropped, resized, and padded to match images
 
 #### Usage Notes:
-- **Empty Masks**: Images with empty/invalid masks are cropped to full bounds
-- **Aspect Ratio**: Cropped content maintains original proportions with padding
-- **Batch Consistency**: All images in batch end up with identical dimensions
-- **Mask Alignment**: Output masks perfectly align with their corresponding images
+- **Bounds**: The crop keeps every pixel where the mask is above 0.5, including a mask that is a single row, column, or pixel. `optional_padding` adds that many pixels on each side and stops at the image edge
+- **Empty Masks**: An empty mask keeps the full frame
+- **Aspect Ratio**: In `mask_for_each`, each crop is scaled to share one canvas while keeping its proportions, then padded
+- **Batch Consistency**: All images in the batch end up with identical dimensions
+- **Mask Alignment**: Output masks are cropped and resized with their images
+- **Hex color**: `padding_color` accepts `#RGB` and `#RRGGBB`. Anything else stops the node with an error
 
 ### Interactive Pose Editor (ae)
 
@@ -278,17 +283,17 @@ This node crops images based on mask boundaries, with two modes for different us
 An interactive pose editor that allows users to manipulate OpenPose keypoints with full control.
 
 #### Inputs:
-- **pose_data** (optional): OpenPose format pose data. If None, creates a default T-pose
-  - Format: `[{"people": [{"pose_keypoints_2d": [x1, y1, conf1, x2, y2, conf2, ...]}]}]`
-  - Each person has 18 keypoints (nose, neck, shoulders, elbows, wrists, hips, knees, ankles, eyes, ears)
-  - Confidence values: 0.0 = missing/hidden, > 0.0 = visible
-- **padding** (optional): Padding in pixels around the pose in output image (default: 100)
-- **x, y, w, h** (optional): Initial window position and size (default: 20, 20, 1024, 1024)
-- **reset_cached_window_position** (optional): Reset window position to defaults (default: False)
+- **POSE_KEYPOINT_optional** (optional): Pose data in the 18-keypoint layout this editor uses. Leave it unconnected to start from a T-pose
+  - A single frame dict is accepted, or a list of frames: `[{"people": [{"pose_keypoints_2d": [x1, y1, conf1, x2, y2, conf2, ...]}]}]`
+  - Keypoint order: nose, neck, right shoulder, right elbow, right wrist, left shoulder, left elbow, left wrist, right hip, right knee, right ankle, left hip, left knee, left ankle, right eye, left eye, right ear, left ear
+  - Confidence `0.0` means missing. A value above `0.0` is visible, and the point must also be somewhere other than `(0, 0)`
+- **padding** (optional): Padding in pixels around the pose in the output image (default: 128)
+- **seed** (optional): Change this to open the editor again with the same pose (default: 0)
+- **reset_cached_window_position** (optional): Open the window at x=20, y=20, size 1024×1024 (default: False). Leave it off to reuse the saved window position and size
 
 #### Outputs:
 - **image**: Rendered pose as tensor (1, H, W, 3) cropped to pose bounds with padding
-- **pose_data**: Updated pose data in same format as input, ready for saving/caching
+- **edited_pose_data**: Updated pose data in the same format as the input
 
 #### Key Features:
 - **Smart Caching**: Automatically caches your edits based on input pose hash - next time you load the same pose, your edits are restored
@@ -299,11 +304,34 @@ An interactive pose editor that allows users to manipulate OpenPose keypoints wi
 - **Window Memory**: Window position and size are remembered between sessions
 
 #### Usage Notes:
-- **Initial Input**: Can accept pose from OpenPose preprocessor, ControlNet, or start from scratch (None = T-pose)
-- **Validation**: Input pose data is validated - returns None if malformed (empty people, missing fields, wrong format)
-- **Coordinate System**: Uses standard OpenPose 18-keypoint format (BODY_25 subset)
-- **Confidence Values**: Only keypoints with confidence > 0.0 are visible and editable
-- **Output Format**: Compatible with ControlNet and other pose-processing nodes
+- **Initial Input**: Connect pose data from an OpenPose preprocessor or ControlNet, or leave the input empty for a T-pose
+- **Validation**: Malformed data (no people, a missing `pose_keypoints_2d`, or a length not divisible by 3) raises an error and does not open the window
+- **Keypoints**: 18 points in the order listed above, the layout used by the common ControlNet OpenPose preprocessor
+- **Confidence Values**: Only keypoints with confidence above 0.0 and a non-zero position are drawn and can be dragged
+- **Window**: Position and size are remembered. If the window is off screen, turn on `reset_cached_window_position` once
+- **Output Format**: `edited_pose_data` can be passed into another Pose Editor or into nodes that take this 18-keypoint list
+
+### Interpolate Float List (ae)
+
+**Category:** `ae-in-workflow`
+
+Turns a comma-separated list of numbers into a fixed-length list. Use it when a later node wants one float per frame or per image and your list is a different length.
+
+#### Inputs:
+- **floats** (required): Numbers separated by commas. Newlines count as commas, and spaces are removed, so `1.0, 2.0` and a column of numbers both work. A space inside a number is removed too, so `1 2` is read as `12`
+- **count** (optional): How many numbers to output (default: 0). `0` or a negative value returns the parsed list, with each value rounded to 6 decimal places
+- **interpolate_across_count** (optional): On by default
+  - On: resample the list to `count` values. The first output is the first input and the last output is the last input
+  - Off: keep the first `count` numbers. When the list is shorter than `count`, the missing entries on the right are `1.0`
+
+#### Outputs:
+- **float_list**: The numbers as a Python list
+- **csv_string**: The same numbers joined with commas
+
+#### Usage Notes:
+- One input number, with interpolation on, is repeated `count` times
+- An empty string with interpolation on and `count` above 0 becomes that many `1.0` values. With `count` at 0 the result is an empty list
+- A token that is not a number, such as `abc`, raises an error that names the token
 
 ## Usage Examples
 
@@ -324,7 +352,7 @@ An interactive pose editor that allows users to manipulate OpenPose keypoints wi
 5. **Auto Processing**: Images are automatically resized and batched
 6. **Connect to Next**: Feed the batched images directly to other nodes
 
-**Pro Tip**: Set target dimensions if you need consistent sizes, otherwise it auto-sizes based on your largest selected image.
+**Pro Tip**: Leave both target sizes at 0 to follow the largest selected image (long side capped at 2048). Set one side when you only care about width or height. Set both when the canvas size must be exact.
 
 ### 🎭 Basic Pose Editing
 1. Load pose data from OpenPose detection or ControlNet
@@ -343,7 +371,7 @@ An interactive pose editor that allows users to manipulate OpenPose keypoints wi
 ### 🎬 Animation Chains & Iterative Refinement
 1. Edit a pose and save it
 2. Next time you load the same pose data, it starts with your previous edits
-3. Use Ctrl+Z to reset to the original if needed
+3. Use Ctrl+O to reset to the original input if needed. Ctrl+Z undoes the last edit
 4. Link multiple Pose Editor nodes for frame-by-frame animation
 5. Chain Z-Image nodes with different image batches for style variations
 
