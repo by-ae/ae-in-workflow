@@ -129,8 +129,8 @@ class PoseEditorNodeAE:
             if image_tensor is None or edited_pose_data is None:
                 raise ValueError(
                     "Pose data is malformed. Expected a list of frames with a non-empty "
-                    "'people' list, and each person needs 'pose_keypoints_2d' as a non-empty "
-                    "list whose length is divisible by 3 (x, y, confidence)."
+                    "'people' list, and each person needs 'pose_keypoints_2d' as numbers "
+                    "grouped by three (x, y, confidence)."
                 )
 
             return (image_tensor, edited_pose_data)

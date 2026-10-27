@@ -194,9 +194,60 @@ def flip_person_horizontal(person_idx, people_keypoints, people_valid_keypoints,
                 keypoints[left_idx], keypoints[right_idx] = keypoints[right_idx], keypoints[left_idx]
 
 
+def _to_jsonable(value):
+    """Convert NumPy and torch values so json.dumps can hash the pose.
+
+    Plain lists, dicts, and numbers are left as they are, so an existing
+    cache key does not change. Tuples become lists, which is what
+    json.dumps already did.
+    """
+    if isinstance(value, dict):
+        return {key: _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _to_jsonable(value.tolist())
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, torch.Tensor):
+        return _to_jsonable(value.detach().cpu().tolist())
+    return value
+
+
+def coerce_keypoint_values(pose):
+    """Return pose keypoints as a flat list of Python floats, or None.
+
+    Accepts a list, tuple, NumPy array, or torch tensor of numbers. Anything
+    else, including a nested tensor, is rejected.
+    """
+    if isinstance(pose, torch.Tensor):
+        if pose.ndim == 0:
+            return None
+        pose = pose.detach().cpu().reshape(-1).tolist()
+    elif isinstance(pose, np.ndarray):
+        pose = pose.reshape(-1).tolist()
+    elif isinstance(pose, (list, tuple)):
+        pose = list(pose)
+    else:
+        return None
+
+    values = []
+    for value in pose:
+        if isinstance(value, np.generic):
+            value = value.item()
+        elif isinstance(value, torch.Tensor):
+            if value.ndim != 0:
+                return None
+            value = value.item()
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        values.append(float(value))
+    return values
+
+
 def get_pose_hash(pose_data):
     """Generate a hash for the pose data to use as cache key"""
-    pose_str = json.dumps(pose_data, sort_keys=True)
+    pose_str = json.dumps(_to_jsonable(pose_data), sort_keys=True)
     return hashlib.md5(pose_str.encode()).hexdigest()
 
 def get_window_position_fallback(window_title):
@@ -588,13 +639,13 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
             print(f"Error: Person {person_idx} missing 'pose_keypoints_2d' field")
             return None, None
         
-        pose = person["pose_keypoints_2d"]
-        
+        pose = coerce_keypoint_values(person["pose_keypoints_2d"])
+
         # Validate pose data format
-        if not isinstance(pose, list):
-            print(f"Error: Person {person_idx} pose_keypoints_2d must be a list, got {type(pose).__name__}")
+        if pose is None:
+            print(f"Error: Person {person_idx} pose_keypoints_2d must be a sequence of numbers, got {type(person['pose_keypoints_2d']).__name__}")
             return None, None
-        
+
         if len(pose) % 3 != 0:
             print(f"Error: Person {person_idx} pose_keypoints_2d length must be divisible by 3, got {len(pose)}")
             return None, None
