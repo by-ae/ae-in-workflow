@@ -449,6 +449,102 @@ def test_crop_mask_for_each_keeps_edge_pixels_and_full_empty_frame():
     assert result_masks.shape == (1, 30, 40)
 
 
+def test_crop_mask_for_each_one_forced_side_keeps_the_other():
+    """Setting only width or only height must not collapse the other side to 0."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    images = torch.zeros(1, 100, 100, 3)
+    images[0, 40:60, 40:60, 0] = 1.0
+    masks = torch.zeros(1, 100, 100)
+    masks[0, 40:60, 40:60] = 1.0
+
+    wide, wide_masks = node.crop_to_mask_bounds(
+        images, masks, mode="mask_for_each", color_fill_mask=False,
+        optional_new_width=128, optional_new_height=0,
+    )
+    assert wide.shape == (1, 20, 128, 3)
+    assert wide_masks.shape == (1, 20, 128)
+    # 20x20 crop is centered in the 128-wide canvas.
+    assert float(wide[0, 10, 64, 0]) > 0.9
+    assert float(wide[0, 10, 0, 0]) == 0.0
+
+    tall, tall_masks = node.crop_to_mask_bounds(
+        images, masks, mode="mask_for_each", color_fill_mask=False,
+        optional_new_width=0, optional_new_height=200,
+    )
+    assert tall.shape == (1, 200, 20, 3)
+    assert tall_masks.shape == (1, 200, 20)
+    assert float(tall[0, 100, 10, 0]) > 0.9
+    assert float(tall[0, 0, 0, 0]) == 0.0
+
+
+def test_crop_mask_for_each_empty_mask_width_only():
+    """An empty mask with only a width still has the original height."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    images = torch.ones(1, 30, 40, 3)
+    masks = torch.zeros(1, 30, 40)
+    result, result_masks = node.crop_to_mask_bounds(
+        images, masks, mode="mask_for_each", color_fill_mask=False,
+        optional_new_width=100, optional_new_height=0,
+    )
+    assert result.shape == (1, 30, 100, 3)
+    assert result_masks.shape == (1, 30, 100)
+
+
+def test_crop_mask_for_each_batch_uses_tallest_crop_when_height_unset():
+    """With only width set, the canvas height is the tallest crop in the batch."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    images = torch.zeros(2, 100, 100, 3)
+    masks = torch.zeros(2, 100, 100)
+    masks[0, 10:30, 10:20] = 1.0  # 20 x 10
+    masks[1, 40:80, 40:90] = 1.0  # 40 x 50
+    result, _ = node.crop_to_mask_bounds(
+        images, masks, mode="mask_for_each", color_fill_mask=False,
+        optional_new_width=80, optional_new_height=0,
+    )
+    assert result.shape == (2, 40, 80, 3)
+
+
+def test_crop_sum_of_masks_size_requests_keep_previous_behavior():
+    """sum_of_masks: width above 0 returns the expanded frame; height alone still crops."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    images = torch.zeros(1, 100, 100, 3)
+    masks = torch.zeros(1, 100, 100)
+    masks[0, 40:60, 40:60] = 1.0
+
+    expanded, expanded_masks = node.crop_to_mask_bounds(
+        images, masks, mode="sum_of_masks", color_fill_mask=False,
+        optional_new_width=128, optional_new_height=0,
+    )
+    assert expanded.shape == (1, 100, 128, 3)
+    assert int((expanded_masks > 0.5).sum()) == 400
+
+    cropped, _ = node.crop_to_mask_bounds(
+        images, masks, mode="sum_of_masks", color_fill_mask=False,
+        optional_new_width=0, optional_new_height=200,
+    )
+    assert cropped.shape == (1, 20, 20, 3)
+
+
+def test_crop_rejects_non_rgb_channel_count():
+    """A non-RGB image raises a channel error instead of a numpy broadcast crash."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    masks = torch.ones(1, 8, 8)
+    with pytest.raises(ValueError, match="3 color channels"):
+        node.crop_to_mask_bounds(torch.ones(1, 8, 8, 4), masks)
+    with pytest.raises(ValueError, match="3 color channels"):
+        node.crop_to_mask_bounds(torch.ones(1, 8, 8, 1), masks)
+
+
 def test_crop_node_invalid_tensor_shapes():
     """Test error handling for invalid tensor shapes"""
     from __init__ import CropImageBatchToMaskBoundsNodeAE

@@ -458,14 +458,14 @@ class CropImageBatchToMaskBoundsNodeAE:
                     "min": 0,
                     "max": 4096,
                     "step": 1,
-                    "tooltip": "Force output width to this size (0 = use combined mask bounds)"
+                    "tooltip": "mask_for_each: exact output width, or 0 for the widest crop. sum_of_masks: a value above 0 expands the frame to at least this width and skips the mask crop."
                 }),
                 "optional_new_height": ("INT", {
                     "default": 0,
                     "min": 0,
                     "max": 4096,
                     "step": 1,
-                    "tooltip": "Force output height to this size (0 = use combined mask bounds)"
+                    "tooltip": "mask_for_each: exact output height, or 0 for the tallest crop. sum_of_masks: pads to at least this height before the mask crop. If width is also above 0, the mask crop is skipped."
                 }),
                 "color_fill_mask": ("BOOLEAN", {
                     "default": True,
@@ -518,6 +518,11 @@ class CropImageBatchToMaskBoundsNodeAE:
         
         if images.shape[1] != masks.shape[1] or images.shape[2] != masks.shape[2]:
             raise ValueError(f"images and masks must have same spatial dimensions, got images: ({images.shape[1]}, {images.shape[2]}), masks: ({masks.shape[1]}, {masks.shape[2]})")
+
+        if images.shape[3] != 3:
+            raise ValueError(
+                f"images must have 3 color channels (B, H, W, 3), got shape {tuple(images.shape)}"
+            )
         
         # Validate inputs
         if mode not in ["mask_for_each", "sum_of_masks"]:
@@ -544,21 +549,23 @@ class CropImageBatchToMaskBoundsNodeAE:
             print(f"Invalid padding_color '{padding_color}', using black")
             padding_rgb = (0, 0, 0)
 
-        # Pre-process: expand canvas to target dimensions if specified
-        if optional_new_width > 0 or optional_new_height > 0:
-            target_width = optional_new_width
-            target_height = optional_new_height
-            images, masks = self._expand_canvas(images, masks, padding_rgb, target_width, target_height)
+        # Grow the frame when a size is requested. Zero on an axis leaves that
+        # side at the current image size inside _expand_canvas.
+        size_requested = optional_new_width > 0 or optional_new_height > 0
+        if size_requested:
+            images, masks = self._expand_canvas(
+                images, masks, padding_rgb, optional_new_width, optional_new_height
+            )
 
         try:
-            # padding_rgb already converted above
-
-            # Process based on mode - use target dimensions as forced bounds if specified
-            forced_bounds = (target_width, target_height) if 'target_width' in locals() and target_width > 0 else None
-
             if mode == "mask_for_each":
+                # A 0 on one axis means "use the crop size", not a 0-pixel canvas.
+                forced_bounds = (optional_new_width, optional_new_height) if size_requested else None
                 return self._crop_mask_for_each(images, masks, invert_mask, padding_rgb, optional_padding, color_fill_mask, forced_bounds)
             elif mode == "sum_of_masks":
+                # A positive width keeps the expanded frame instead of the mask crop.
+                # Height alone still crops, so an interior mask does not grow.
+                forced_bounds = (optional_new_width, optional_new_height) if optional_new_width > 0 else None
                 return self._crop_sum_of_masks(images, masks, invert_mask, padding_rgb, optional_padding, color_fill_mask, forced_bounds)
             else:
                 raise ValueError(f"Unknown mode: {mode}")
@@ -637,14 +644,18 @@ class CropImageBatchToMaskBoundsNodeAE:
             cropped_images.append((cropped_img, crop_width, crop_height))
             cropped_masks.append((cropped_mask, crop_width, crop_height))
 
-        # Determine final canvas dimensions
+        # Determine final canvas dimensions. A forced side of 0 keeps the
+        # largest crop on that axis so a single width or height cannot build
+        # a 0-pixel image.
+        natural_w = max(all_crop_widths) if all_crop_widths else 1
+        natural_h = max(all_crop_heights) if all_crop_heights else 1
         if forced_bounds:
-            # Use forced bounds
-            canvas_width, canvas_height = forced_bounds
+            forced_w, forced_h = forced_bounds
+            canvas_width = forced_w if forced_w > 0 else natural_w
+            canvas_height = forced_h if forced_h > 0 else natural_h
         else:
-            # Use combined bounds (existing behavior)
-            canvas_width = max(all_crop_widths) if all_crop_widths else 1
-            canvas_height = max(all_crop_heights) if all_crop_heights else 1
+            canvas_width = natural_w
+            canvas_height = natural_h
 
         # Second pass: scale each cropped image UP to fit within canvas dimensions (maintaining aspect ratio), then pad
         final_images = []

@@ -258,8 +258,8 @@ This node crops images based on mask boundaries, with two modes for different us
 - **mode** (optional): Cropping mode - "mask_for_each" or "sum_of_masks" (default: "mask_for_each")
 - **padding_color** (optional): Hex color for padding areas (default: "#000000")
 - **optional_padding** (optional): Extra padding pixels around cropped areas (default: 0)
-- **optional_new_width** (optional): Minimum canvas width before cropping (default: 0, which keeps the current width). The canvas grows when the image is narrower than this
-- **optional_new_height** (optional): Minimum canvas height before cropping (default: 0, which keeps the current height). The canvas grows when the image is shorter than this
+- **optional_new_width** (optional): Output width in pixels (default: 0). In `mask_for_each`, 0 uses the widest crop and any other value is the exact canvas width. In `sum_of_masks`, a value above 0 expands the frame to at least this width and skips the mask crop, returning that whole frame
+- **optional_new_height** (optional): Output height in pixels (default: 0). In `mask_for_each`, 0 uses the tallest crop and any other value is the exact canvas height. In `sum_of_masks`, a value above 0 pads the image to at least this height and the mask crop still runs, so an interior mask stays the same size. The extra height remains when the crop reaches it (an empty mask, or `optional_padding` at the bottom edge). If width is also above 0, the mask crop is skipped and the padded frame is returned
 - **color_fill_mask** (optional): When on (default), pixels below mask value 0.5 are replaced with `padding_color` before the crop. With `invert_mask` on, pixels above 0.5 are filled instead
 
 #### Outputs:
@@ -268,6 +268,7 @@ This node crops images based on mask boundaries, with two modes for different us
 
 #### Usage Notes:
 - **Bounds**: The crop keeps every pixel where the mask is above 0.5, including a mask that is a single row, column, or pixel. `optional_padding` adds that many pixels on each side and stops at the image edge
+- **Output size**: In `mask_for_each`, set one side to force that canvas side and leave the other at 0 to keep the crop's own size. The crop is scaled to fit inside that canvas and padded. Both sides at 0 use the largest crop in the batch. Images need 3 color channels; a different count stops the node with an error
 - **Empty Masks**: An empty mask keeps the full frame
 - **Aspect Ratio**: In `mask_for_each`, each crop is scaled to share one canvas while keeping its proportions, then padded
 - **Batch Consistency**: All images in the batch end up with identical dimensions
