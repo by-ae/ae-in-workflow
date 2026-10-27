@@ -67,6 +67,84 @@ def test_get_pose_hash():
     assert len(hash1) > 0
 
 
+def test_get_pose_hash_accepts_numpy_and_torch_without_changing_plain_keys():
+    """NumPy and torch keypoints hash, and plain JSON data keeps its cache key."""
+    from pose_editor import get_pose_hash
+
+    plain = [{"people": [{"pose_keypoints_2d": [100, 200, 1.0, 150, 250, 1.0]}]}]
+    # Locked so existing cache files still match this input.
+    assert get_pose_hash(plain) == "df9dda7e76b0501bd3e52d88666a9fc7"
+
+    numpy_pose = [{"people": [{"pose_keypoints_2d": [
+        np.float32(100.0), np.float32(200.0), np.float32(1.0),
+        np.float32(150.0), np.float32(250.0), np.float32(1.0),
+    ]}]}]
+    floats = [{"people": [{"pose_keypoints_2d": [100.0, 200.0, 1.0, 150.0, 250.0, 1.0]}]}]
+    assert get_pose_hash(numpy_pose) == get_pose_hash(floats)
+
+    array_pose = [{"canvas_width": np.int64(64), "people": [{
+        "pose_keypoints_2d": np.array([100.0, 200.0, 1.0, 150.0, 250.0, 1.0], dtype=np.float32)
+    }]}]
+    array_plain = [{"canvas_width": 64, "people": [{
+        "pose_keypoints_2d": [100.0, 200.0, 1.0, 150.0, 250.0, 1.0]
+    }]}]
+    assert get_pose_hash(array_pose) == get_pose_hash(array_plain)
+
+    import torch
+    tensor_pose = [{"people": [{"pose_keypoints_2d": torch.tensor(
+        [100.0, 200.0, 1.0, 150.0, 250.0, 1.0], dtype=torch.float32
+    )}]}]
+    assert get_pose_hash(tensor_pose) == get_pose_hash(floats)
+
+
+def test_coerce_keypoint_values():
+    """Sequences of numbers become Python floats. Other objects are rejected."""
+    from pose_editor import coerce_keypoint_values
+    import torch
+
+    assert coerce_keypoint_values([1, 2.5, np.float32(3)]) == [1.0, 2.5, 3.0]
+    assert coerce_keypoint_values(np.array([1.0, 2.0, 3.0], dtype=np.float32)) == [1.0, 2.0, 3.0]
+    assert coerce_keypoint_values(torch.tensor([4.0, 5.0, 6.0])) == [4.0, 5.0, 6.0]
+    assert coerce_keypoint_values("not a list") is None
+    assert coerce_keypoint_values([1, 2, "nope"]) is None
+    assert coerce_keypoint_values(torch.tensor(1.0)) is None
+
+
+def test_numpy_keypoints_reach_the_editor(monkeypatch):
+    """Valid NumPy keypoints get as far as opening the window, instead of a black image."""
+    import pygame
+    import pose_editor
+
+    def display_opened(*args, **kwargs):
+        raise RuntimeError("display opened")
+
+    monkeypatch.setattr(pygame.display, "set_mode", display_opened)
+    pose = [{"people": [{"pose_keypoints_2d": [
+        np.float32(10), np.float32(20), np.float32(1),
+        np.float32(11), np.float32(21), np.float32(1),
+    ]}]}]
+    with pytest.raises(RuntimeError, match="display opened"):
+        pose_editor.pose_editor(pose, reset_cached_window_position=True)
+
+    array_pose = [{"people": [{"pose_keypoints_2d": np.array(
+        [10.0, 20.0, 1.0, 11.0, 21.0, 1.0], dtype=np.float32
+    )}]}]
+    with pytest.raises(RuntimeError, match="display opened"):
+        pose_editor.pose_editor(array_pose, reset_cached_window_position=True)
+
+
+def test_pose_node_rejects_numpy_keypoints_with_bad_length():
+    """A bad NumPy list raises, instead of the node swallowing it as a black image."""
+    from __init__ import PoseEditorNodeAE
+
+    node = PoseEditorNodeAE()
+    pose = [{"people": [{"pose_keypoints_2d": [
+        np.float32(1.0), np.float32(2.0), np.float32(0.5), np.float32(3.0),
+    ]}]}]
+    with pytest.raises(ValueError, match="Pose data is malformed"):
+        node.edit_pose(POSE_KEYPOINT_optional=pose)
+
+
 def test_get_child_keypoints():
     """Test getting child keypoints from skeleton structure"""
     from pose_editor import get_child_keypoints
