@@ -216,7 +216,7 @@ Mouse Wheel: Scroll through images (right) or folders (left)
 - **batch_count**: Number of images in the batch
 
 #### Usage Notes:
-- **Supported Formats**: PNG, JPG, JPEG, BMP, TIFF, WebP (those file extensions)
+- **Supported Formats**: PNG, JPG, JPEG, BMP, TIF, TIFF, and WebP
 - **Asynchronous Loading**: Folders load in background with loading indicator - no UI freezing even with 1000+ images
 - **Lazy Loading**: Images are loaded on-demand with intelligent caching for smooth scrolling
 - **Memory Management**: Only visible images are kept in memory with automatic cleanup

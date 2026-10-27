@@ -11,7 +11,7 @@ from typing import Tuple, List, Optional
 
 def load_images_from_folder(folder_path):
     """Load all image files from folder"""
-    supported_formats = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')
+    supported_formats = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp')
     images = []
     paths = []
 

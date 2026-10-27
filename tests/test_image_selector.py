@@ -157,6 +157,24 @@ def test_load_images_from_folder():
     assert len(paths) == 0
 
 
+def test_load_images_from_folder_includes_tif_extension():
+    """TIFF files saved as .tif or .TIF are images, same as .tiff."""
+    from image_selector import load_images_from_folder
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        Image.new('RGB', (4, 4), 'red').save(os.path.join(tmpdir, 'a.tif'))
+        Image.new('RGB', (4, 4), 'blue').save(os.path.join(tmpdir, 'b.tiff'))
+        Image.new('RGB', (4, 4), 'green').save(os.path.join(tmpdir, 'c.TIF'))
+        with open(os.path.join(tmpdir, 'notes.txt'), 'w', encoding='utf-8') as handle:
+            handle.write('not an image')
+
+        images, paths = load_images_from_folder(tmpdir)
+        names = sorted(os.path.basename(path) for path in paths)
+        assert names == ['a.tif', 'b.tiff', 'c.TIF']
+        assert len(images) == 3
+
+
 def test_sort_image_paths():
     """Test sorting image paths"""
     from image_selector import sort_image_paths
