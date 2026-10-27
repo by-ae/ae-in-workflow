@@ -217,6 +217,7 @@ Mouse Wheel: Scroll through images (right) or folders (left)
 
 #### Usage Notes:
 - **Supported Formats**: PNG, JPG, JPEG, BMP, TIF, TIFF, and WebP
+- **Orientation**: Images are turned upright from their EXIF orientation tag before the thumbnail grid and the output batch are built. Images with no orientation tag are left as stored
 - **Asynchronous Loading**: Folders load in background with loading indicator - no UI freezing even with 1000+ images
 - **Lazy Loading**: Images are loaded on-demand with intelligent caching for smooth scrolling
 - **Memory Management**: Only visible images are kept in memory with automatic cleanup

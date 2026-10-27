@@ -175,6 +175,58 @@ def test_load_images_from_folder_includes_tif_extension():
         assert len(images) == 3
 
 
+def _save_jpeg_with_orientation(path, size, orientation):
+    """Write a JPEG whose EXIF orientation tag asks for a rotation."""
+    image = Image.new('RGB', size, 'red')
+    image.putpixel((0, 0), (0, 255, 0))
+    exif = image.getexif()
+    exif[0x0112] = orientation
+    image.save(path, exif=exif)
+    return image
+
+
+def test_open_image_applies_exif_orientation(tmp_path):
+    """Orientation 6 (90 degrees clockwise) swaps the stored width and height."""
+    from image_selector import open_image, load_selected_images, load_images_from_folder
+
+    path = tmp_path / 'turned.jpg'
+    _save_jpeg_with_orientation(path, (8, 4), 6)
+
+    opened = open_image(str(path))
+    assert opened.size == (4, 8)
+    # Tag is cleared so a later save is not rotated again.
+    assert opened.getexif().get(0x0112) in (None, 1)
+
+    loaded = load_selected_images([str(path)])
+    assert len(loaded) == 1
+    assert loaded[0].size == (4, 8)
+
+    images, paths = load_images_from_folder(str(tmp_path))
+    assert paths == [str(path)]
+    assert images[0].size == (4, 8)
+
+
+def test_open_image_without_exif_keeps_size(tmp_path):
+    """A file with no orientation tag keeps its stored size."""
+    from image_selector import open_image
+
+    path = tmp_path / 'plain.png'
+    Image.new('RGB', (8, 4), 'blue').save(path)
+    opened = open_image(str(path))
+    assert opened.size == (8, 4)
+
+
+def test_load_selected_images_skips_unreadable(tmp_path):
+    """One bad path does not drop the images that did open."""
+    from image_selector import load_selected_images
+
+    good = tmp_path / 'ok.png'
+    Image.new('RGB', (2, 2), 'red').save(good)
+    loaded = load_selected_images([str(tmp_path / 'missing.png'), str(good)])
+    assert len(loaded) == 1
+    assert loaded[0].size == (2, 2)
+
+
 def test_sort_image_paths():
     """Test sorting image paths"""
     from image_selector import sort_image_paths

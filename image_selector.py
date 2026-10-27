@@ -2,12 +2,27 @@ import os
 import pygame
 import torch
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 import math
 import time
 import json
 import threading
 from typing import Tuple, List, Optional
+
+def open_image(path):
+    """Open an image file and apply its EXIF orientation tag.
+
+    Uses Pillow's ImageOps.exif_transpose, which is present in Pillow 8.0
+    (this project requires Pillow>=8). When the tag is missing or is 1
+    (already upright), the pixels are unchanged. The tag is removed from
+    the result so a later save is not rotated a second time.
+    """
+    img = Image.open(path)
+    transposed = ImageOps.exif_transpose(img)
+    if transposed is not img:
+        img.close()
+    return transposed
+
 
 def load_images_from_folder(folder_path):
     """Load all image files from folder"""
@@ -22,7 +37,7 @@ def load_images_from_folder(folder_path):
         if file.lower().endswith(supported_formats):
             path = os.path.join(folder_path, file)
             try:
-                img = Image.open(path)
+                img = open_image(path)
                 images.append(img)
                 paths.append(path)
             except Exception as e:
@@ -345,7 +360,7 @@ class LazyImageLoader:
         if len(self.loading_queue) < 1:  # Max 1 concurrent load
             self.loading_queue.add(path)
             try:
-                img = Image.open(path)
+                img = open_image(path)
                 # Resize more efficiently
                 img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
                 # Create square thumbnail by padding
@@ -859,6 +874,18 @@ def process_selected_images(images, selected_indices, target_width_param=None, t
 
     return image_list, mask_list, image_batch, mask_batch
 
+def load_selected_images(paths):
+    """Open the chosen files, applying EXIF orientation, and skip ones that fail."""
+    selected_images = []
+    for path in paths:
+        try:
+            selected_images.append(open_image(path))
+        except Exception as e:
+            print(f"Failed to load selected image {path}: {e}")
+            continue
+    return selected_images
+
+
 def image_selector(folder_path, target_width_param=None, target_height_param=None, padding_color="#000000"):
     """Main function: load image paths, show UI, process selection"""
     # Only load paths initially, not images
@@ -877,14 +904,7 @@ def image_selector(folder_path, target_width_param=None, target_height_param=Non
     selected_paths = create_image_selector_ui(paths, folder_path, padding_color, target_width_param, target_height_param)
 
     # Now load only the selected images
-    selected_images = []
-    for path in selected_paths:
-        try:
-            img = Image.open(path)
-            selected_images.append(img)
-        except Exception as e:
-            print(f"Failed to load selected image {path}: {e}")
-            continue
+    selected_images = load_selected_images(selected_paths)
 
     # Process selected images
     return process_selected_images(selected_images, list(range(len(selected_images))), target_width_param, target_height_param, padding_color)
