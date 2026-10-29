@@ -148,6 +148,17 @@ def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, 
     thread.start()
     return thread
 
+def selection_toggle_label(selected_count, total_count):
+    """Label for the image selector's select-all button.
+
+    When every image is selected the click clears that selection, so the
+    label has to say so. An empty folder stays on SELECT ALL.
+    """
+    if total_count > 0 and selected_count == total_count:
+        return "DESELECT ALL"
+    return "SELECT ALL"
+
+
 def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     """Convert hex color string to RGB tuple
     
@@ -467,8 +478,7 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
 
     running = True
     clock = pygame.time.Clock()
-    select_all = False
-    
+
     # Button position variables (calculated each frame but initialized here to avoid undefined name errors)
     select_all_x = 10
     sort_mode_x = 150
@@ -516,11 +526,11 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                         # Check if click is on control buttons
                         button_y = screen_height - 70
                         if button_y <= mouse_y <= button_y + 20:
-                            # Select All button
-                            select_all_text = "SELECT ALL" if len(selected_paths) != len(paths) else "DESELECT ALL"
-                            select_all_surface = render_text_with_outline(font, select_all_text, TEXT_COLOR)
+                            # Select All button. Width matches the drawn label.
+                            select_all_text = selection_toggle_label(len(selected_paths), len(paths))
+                            select_all_surface = font.render(select_all_text, True, TEXT_COLOR)
                             if select_all_x <= mouse_x <= select_all_x + select_all_surface.get_width():
-                                if len(selected_paths) != len(paths):
+                                if select_all_text == "SELECT ALL":
                                     # Select all in current sorted order
                                     selected_paths = paths.copy()
                                     selected_path_set = set(paths)
@@ -626,7 +636,7 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
         button_y = screen_height - 70
 
         # Select All button
-        select_all_text = "SELECT ALL" if not select_all else "DESELECT ALL"
+        select_all_text = selection_toggle_label(len(selected_paths), len(paths))
         select_all_surface = font.render(select_all_text, True, TEXT_COLOR)
         select_all_x = 10
         pygame.draw.rect(screen, THUMB_BG, (select_all_x - 5, button_y - 5, select_all_surface.get_width() + 10, select_all_surface.get_height() + 10))

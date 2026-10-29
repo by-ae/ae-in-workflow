@@ -249,6 +249,16 @@ def test_sort_image_paths():
     assert result == ['/path/c.jpg', '/path/b.jpg', '/path/a.jpg']
 
 
+def test_selection_toggle_label():
+    """The button must say DESELECT ALL only when the click would clear everything."""
+    from image_selector import selection_toggle_label
+
+    assert selection_toggle_label(0, 4) == "SELECT ALL"
+    assert selection_toggle_label(3, 4) == "SELECT ALL"
+    assert selection_toggle_label(4, 4) == "DESELECT ALL"
+    assert selection_toggle_label(0, 0) == "SELECT ALL"
+
+
 def test_build_folder_tree():
     """Test folder tree building"""
     from image_selector import build_folder_tree
