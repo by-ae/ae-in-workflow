@@ -159,9 +159,9 @@ Convert images to LoRA (Low-Rank Adaptation) using the Z-Image pipeline from Dif
 
 #### Inputs:
 - **images** (required): Batch of images as tensor (shape: B×H×W×3)
-- **lora_name** (required): Dataset name for the LoRA (default: "my_lora")
+- **lora_name** (required): Dataset name for the LoRA (default: "my_lora"). Letters and digits in any language are kept, spaces become underscores, and other characters are removed. A name with no letters or numbers stops the node
 - **batch_size** (optional): Images to process simultaneously (default: 8, higher = faster but more VRAM)
-- **lora_weights** (optional): Comma-separated weights for each image (e.g., "1.0,2.0,0.5") - leave empty for equal weighting
+- **lora_weights** (optional): Comma-separated weights for each image (e.g., "1.0,2.0,0.5"). Leave empty for equal weighting. A token that is not a finite number stops the node and names the token
 - **normalize_saved_lora_strength_to** (optional): Strength stored in the saved LoRA (default: 1.0). If a result only looked right at loader strength 1.75, set this to 1.75 and loader strength 1.0 matches that
 - **reduce_size_factor** (optional): Batch size for averaging LoRAs (default: 1, higher = smaller final LoRA by averaging groups)
 - **unload_models_before_running** (optional): Unload other ComfyUI models before running (default: True). Set this to False to leave them loaded

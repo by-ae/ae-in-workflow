@@ -29,6 +29,12 @@ def test_sanitize_lora_name():
     assert sanitize_lora_name("my-lora!@#") == "mylora"
     assert sanitize_lora_name("My LoRA 2024!") == "my_lora_2024"
     assert sanitize_lora_name("") == ""
+    # Underscores are stripped, same as other non-letters. "my_lora" stays "mylora".
+    assert sanitize_lora_name("my_lora") == "mylora"
+    assert sanitize_lora_name(" my lora ") == "my_lora"
+    # Letters outside ASCII used to be removed, so every such name collided.
+    assert sanitize_lora_name("写真スタイル") == "写真スタイル"
+    assert sanitize_lora_name("Éclair 2") == "éclair_2"
 
 
 def test_find_next_version(tmp_path):
@@ -238,6 +244,67 @@ def test_process_images_to_lora_without_deps():
             process_images_to_lora(dummy_tensor, "test", 1)
         
         assert "DiffSynth-Studio" in str(exc_info.value)
+
+
+def test_require_lora_filename_rejects_empty_names():
+    """Names with no letters or digits must not share one output file."""
+    from zimage_i2l import require_lora_filename, process_images_to_lora
+
+    assert require_lora_filename("My LoRA") == "my_lora"
+    assert require_lora_filename("写真") == "写真"
+
+    for bad in ("", "   ", "!!!", "___"):
+        with pytest.raises(ValueError, match="letter or number"):
+            require_lora_filename(bad)
+
+    torch = pytest.importorskip("torch")
+    with pytest.raises(ValueError, match="letter or number"):
+        process_images_to_lora(torch.zeros(1, 2, 2, 3), "!!!", 1)
+
+
+def test_parse_lora_weights():
+    """A bad token raises. It used to be dropped and saved as equal weights."""
+    from zimage_i2l import parse_lora_weights
+
+    assert parse_lora_weights("") == []
+    assert parse_lora_weights("  ") == []
+    assert parse_lora_weights("1.0, 2, -0.5") == [1.0, 2.0, -0.5]
+    assert parse_lora_weights("1,,2,") == [1.0, 2.0]
+
+    with pytest.raises(ValueError, match="could not parse: abc"):
+        parse_lora_weights("1.0, abc, 2.0")
+    with pytest.raises(ValueError, match="could not parse: nan, inf"):
+        parse_lora_weights("nan, inf")
+    with pytest.raises(ValueError, match="got list"):
+        parse_lora_weights([1.0, 2.0])
+
+
+def test_node_rejects_bad_lora_inputs_before_conversion(monkeypatch):
+    """The node stops before starting a conversion when the name or weights are unusable."""
+    import __init__ as nodes
+
+    torch = pytest.importorskip("torch")
+    called = []
+    monkeypatch.setattr(nodes, "process_images_to_lora", lambda *args, **kwargs: called.append(args))
+    monkeypatch.setattr(nodes, "DIFF_SYNTH_AVAILABLE", True)
+    monkeypatch.setattr(nodes, "DEPENDENCIES_AVAILABLE", True)
+
+    node = nodes.ZImageImagesToLoRANodeAE()
+    images = torch.zeros(1, 2, 2, 3)
+
+    with pytest.raises(ValueError, match="letter or number"):
+        node.images_to_lora(images, "!!!", unload_models_before_running=False)
+    with pytest.raises(ValueError, match="could not parse: abc"):
+        node.images_to_lora(images, "my_lora", lora_weights="1, abc", unload_models_before_running=False)
+    assert called == []
+
+    monkeypatch.setattr(
+        nodes,
+        "process_images_to_lora",
+        lambda *args, **kwargs: "Z-Image/ae/z-image_out.safetensors",
+    )
+    result = node.images_to_lora(images, "写真", lora_weights="1.5, 0.5", unload_models_before_running=False)
+    assert result == ("Z-Image/ae/z-image_out.safetensors",)
 
 
 def test_unload_models_before_running_is_honored(monkeypatch):
