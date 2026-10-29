@@ -24,9 +24,39 @@ def open_image(path):
     return transposed
 
 
+# Extensions the selector treats as images. Matching is case-insensitive.
+SUPPORTED_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp')
+
+
+def list_loadable_image_paths(folder_path):
+    """Return paths of images that open, without keeping the decoded files.
+
+    The selector only needs paths until a thumbnail or the output batch is
+    built. Holding every opened image used the memory and file handles of
+    the whole folder at once.
+    """
+    paths = []
+    if not folder_path or not os.path.exists(folder_path):
+        return paths
+
+    for file in os.listdir(folder_path):
+        if not file.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
+            continue
+        path = os.path.join(folder_path, file)
+        try:
+            img = open_image(path)
+            try:
+                img.load()
+            finally:
+                img.close()
+            paths.append(path)
+        except Exception as e:
+            print(f"Failed to load {path}: {e}")
+    return paths
+
+
 def load_images_from_folder(folder_path):
     """Load all image files from folder"""
-    supported_formats = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp')
     images = []
     paths = []
 
@@ -34,7 +64,7 @@ def load_images_from_folder(folder_path):
         return images, paths
 
     for file in os.listdir(folder_path):
-        if file.lower().endswith(supported_formats):
+        if file.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
             path = os.path.join(folder_path, file)
             try:
                 img = open_image(path)
@@ -134,8 +164,8 @@ def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, 
     """Load folder contents asynchronously"""
     def load_task():
         try:
-            # Load images from folder
-            _, paths = load_images_from_folder(folder_path)
+            # Paths only. The decoded files are closed inside the lister.
+            paths = list_loadable_image_paths(folder_path)
             # Sort them
             paths = sort_image_paths(paths, sort_modes[sort_mode_index], sort_ascending)
             # Call back with results
@@ -372,16 +402,19 @@ class LazyImageLoader:
             self.loading_queue.add(path)
             try:
                 img = open_image(path)
-                # Resize more efficiently
-                img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
-                # Create square thumbnail by padding
-                thumb = Image.new('RGB', self.thumbnail_size, (0, 0, 0))
-                x = (self.thumbnail_size[0] - img.width) // 2
-                y = (self.thumbnail_size[1] - img.height) // 2
-                thumb.paste(img, (x, y))
+                try:
+                    # Resize more efficiently
+                    img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+                    # Create square thumbnail by padding
+                    thumb = Image.new('RGB', self.thumbnail_size, (0, 0, 0))
+                    x = (self.thumbnail_size[0] - img.width) // 2
+                    y = (self.thumbnail_size[1] - img.height) // 2
+                    thumb.paste(img, (x, y))
 
-                # Convert PIL to pygame surface
-                thumb_surface = pygame.image.fromstring(thumb.tobytes(), thumb.size, 'RGB')
+                    # Convert PIL to pygame surface
+                    thumb_surface = pygame.image.fromstring(thumb.tobytes(), thumb.size, 'RGB')
+                finally:
+                    img.close()
 
                 # Add to cache
                 self.cache[path] = (thumb_surface, self.access_counter)
@@ -899,7 +932,7 @@ def load_selected_images(paths):
 def image_selector(folder_path, target_width_param=None, target_height_param=None, padding_color="#000000"):
     """Main function: load image paths, show UI, process selection"""
     # Only load paths initially, not images
-    _, paths = load_images_from_folder(folder_path)
+    paths = list_loadable_image_paths(folder_path)
 
     if not paths:
         # Return empty results if no images found
