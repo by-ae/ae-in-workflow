@@ -422,6 +422,63 @@ def test_nearest_visible_keypoint_ignores_hidden_joints():
     assert nearest_visible_keypoint((10, 0), tied, [], 5) is None
 
 
+def test_people_state_from_frames_accepts_rows_and_stays_jsonable():
+    """Ctrl+O and the initial load share this decoder.
+
+    A NumPy array of rows was accepted on open, but reset used to copy the
+    array values through. Those are not JSON, so the cache write failed.
+    """
+    import json
+
+    import numpy as np
+    import torch
+    from pose_editor import people_state_from_frames
+
+    flat = []
+    for i in range(18):
+        if i == 4:
+            flat.extend([0.0, 0.0, 0.5])
+        else:
+            flat.extend([float(i + 1), float(i + 2), 1.0])
+    rows = np.array(flat, dtype=np.float32).reshape(18, 3)
+
+    from_list = people_state_from_frames([{"pose_keypoints_2d": flat}])
+    from_rows = people_state_from_frames([{"pose_keypoints_2d": rows}])
+    from_tensor = people_state_from_frames([{"pose_keypoints_2d": torch.tensor(rows)}])
+
+    assert from_rows[0] == from_list[0]
+    assert from_tensor[0] == from_list[0]
+    # Origin with a positive confidence stays hidden, and the confidence is kept.
+    assert 4 not in from_rows[1][0]
+    assert from_rows[2][0][4] == 0.5
+    json.dumps(from_rows[0])
+
+    with pytest.raises(ValueError, match="missing 'pose_keypoints_2d'"):
+        people_state_from_frames(["not-a-person"])
+    with pytest.raises(ValueError, match="divisible by 3"):
+        people_state_from_frames([{"pose_keypoints_2d": [1.0, 2.0]}])
+
+
+def test_opening_the_editor_uses_the_shared_decoder(monkeypatch):
+    """A bad decode stops the editor before the window, using the shared parser."""
+    import pose_editor
+
+    seen = {}
+
+    def boom(people_data):
+        seen["people"] = people_data
+        raise ValueError("stop before the window")
+
+    monkeypatch.setattr(pose_editor, "people_state_from_frames", boom)
+    result = pose_editor.pose_editor(
+        [{"people": [{"pose_keypoints_2d": [1.0, 2.0, 3.0]}]}],
+        padding=10,
+        reset_cached_window_position=True,
+    )
+    assert result == (None, None)
+    assert seen["people"][0]["pose_keypoints_2d"] == [1.0, 2.0, 3.0]
+
+
 def test_saved_keypoint_confidence_stays_zero_when_hidden():
     """A positive stored confidence does not make a hidden joint visible again."""
     from pose_editor import saved_keypoint_confidence
