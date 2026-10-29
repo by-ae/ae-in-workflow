@@ -386,6 +386,123 @@ def test_get_nearest_bone():
     assert len(nearest) == 2
 
 
+def test_canvas_placement_keeps_padding_around_the_pose():
+    """Saved points use the same origin as the cropped render."""
+    from pose_editor import canvas_placement
+
+    # Large enough that the 64px minimum does not add extra space.
+    width, height, offset_x, offset_y, raw_w, raw_h = canvas_placement(
+        [(0, 0), (200, 180)], padding=10
+    )
+    assert (width, height) == (raw_w, raw_h) == (221, 201)
+    # The leftmost and topmost points sit `padding` pixels in from the edge.
+    assert 0 + offset_x == 10
+    assert 0 + offset_y == 10
+    # The right and bottom padding is the same, on the last pixel of the canvas.
+    assert width - 1 - (200 + offset_x) == 10
+    assert height - 1 - (180 + offset_y) == 10
+
+
+def test_nearest_visible_keypoint_ignores_hidden_joints():
+    """A hidden joint under the cursor must not steal the drag or the rotation."""
+    from pose_editor import nearest_visible_keypoint
+
+    keypoints = [[0, 0], [40, 0], [80, 0]]
+    # Index 0 is hidden even though it is closest to the cursor.
+    visible = [1, 2]
+    assert nearest_visible_keypoint((0, 0), keypoints, visible, 30) is None
+    assert nearest_visible_keypoint((40, 0), keypoints, visible, 30) == 1
+    assert nearest_visible_keypoint((70, 0), keypoints, visible, 30) == 2
+    # The boundary counts. One pixel past it does not.
+    assert nearest_visible_keypoint((40, 30), keypoints, visible, 30) == 1
+    assert nearest_visible_keypoint((40, 31), keypoints, visible, 30) is None
+    # A tie keeps the lower index.
+    tied = [[0, 0], [10, 0], [10, 0]]
+    assert nearest_visible_keypoint((10, 0), tied, [1, 2], 5) == 1
+    assert nearest_visible_keypoint((10, 0), tied, [], 5) is None
+
+
+def test_people_state_from_frames_accepts_rows_and_stays_jsonable():
+    """Ctrl+O and the initial load share this decoder.
+
+    A NumPy array of rows was accepted on open, but reset used to copy the
+    array values through. Those are not JSON, so the cache write failed.
+    """
+    import json
+
+    import numpy as np
+    import torch
+    from pose_editor import people_state_from_frames
+
+    flat = []
+    for i in range(18):
+        if i == 4:
+            flat.extend([0.0, 0.0, 0.5])
+        else:
+            flat.extend([float(i + 1), float(i + 2), 1.0])
+    rows = np.array(flat, dtype=np.float32).reshape(18, 3)
+
+    from_list = people_state_from_frames([{"pose_keypoints_2d": flat}])
+    from_rows = people_state_from_frames([{"pose_keypoints_2d": rows}])
+    from_tensor = people_state_from_frames([{"pose_keypoints_2d": torch.tensor(rows)}])
+
+    assert from_rows[0] == from_list[0]
+    assert from_tensor[0] == from_list[0]
+    # Origin with a positive confidence stays hidden, and the confidence is kept.
+    assert 4 not in from_rows[1][0]
+    assert from_rows[2][0][4] == 0.5
+    json.dumps(from_rows[0])
+
+    with pytest.raises(ValueError, match="missing 'pose_keypoints_2d'"):
+        people_state_from_frames(["not-a-person"])
+    with pytest.raises(ValueError, match="divisible by 3"):
+        people_state_from_frames([{"pose_keypoints_2d": [1.0, 2.0]}])
+
+
+def test_opening_the_editor_uses_the_shared_decoder(monkeypatch):
+    """A bad decode stops the editor before the window, using the shared parser."""
+    import pose_editor
+
+    seen = {}
+
+    def boom(people_data):
+        seen["people"] = people_data
+        raise ValueError("stop before the window")
+
+    monkeypatch.setattr(pose_editor, "people_state_from_frames", boom)
+    result = pose_editor.pose_editor(
+        [{"people": [{"pose_keypoints_2d": [1.0, 2.0, 3.0]}]}],
+        padding=10,
+        reset_cached_window_position=True,
+    )
+    assert result == (None, None)
+    assert seen["people"][0]["pose_keypoints_2d"] == [1.0, 2.0, 3.0]
+
+
+def test_saved_keypoint_confidence_stays_zero_when_hidden():
+    """A positive stored confidence does not make a hidden joint visible again."""
+    from pose_editor import saved_keypoint_confidence
+
+    visible = [0, 2]
+    assert saved_keypoint_confidence(0, visible) == 1.0
+    assert saved_keypoint_confidence(1, visible) == 0.0
+    assert saved_keypoint_confidence(2, visible) == 1.0
+
+
+def test_canvas_placement_clamps_to_minimum_and_maximum():
+    """A tiny pose still gets a 64px canvas, and a huge one stops at 4096."""
+    from pose_editor import canvas_placement
+
+    width, height, _, _, raw_w, raw_h = canvas_placement([(0, 0), (10, 4)], padding=0)
+    assert raw_w == 11 and raw_h == 5
+    assert width == 64 and height == 64
+
+    width, height, _, _, raw_w, _ = canvas_placement([(0, 0), (10000, 5)], padding=0)
+    assert raw_w == 10001
+    assert width == 4096
+    assert height == 64
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS

@@ -36,7 +36,14 @@ if current_dir not in sys.path:
 from pose_editor import pose_editor
 
 # Import Z-Image functions
-from zimage_i2l import process_images_to_lora, ZIMAGE_AVAILABLE, DIFF_SYNTH_AVAILABLE, DEPENDENCIES_AVAILABLE
+from zimage_i2l import (
+    process_images_to_lora,
+    ZIMAGE_AVAILABLE,
+    DIFF_SYNTH_AVAILABLE,
+    DEPENDENCIES_AVAILABLE,
+    require_lora_filename,
+    parse_lora_weights,
+)
 
 # Import Image Selector functions
 from image_selector import image_selector, hex_to_rgb
@@ -234,13 +241,19 @@ class ZImageImagesToLoRANodeAE:
             images: Tensor of images (B, H, W, 3) to convert to LoRA
             lora_name: Name for the LoRA dataset
             batch_size: Number of images to process simultaneously
-            lora_weights: List of weights for each image (for weighted averaging)
+            lora_weights: Comma-separated weights for each image, or empty for equal weights
             normalize_saved_lora_strength_to: Target strength normalization for saved LoRA
             reduce_size_factor: Batch size for averaging LoRAs (reduces final size)
 
         Returns:
             str: Relative path to the generated LoRA file
         """
+        # Bad names and weights fail before the optional library check, so a
+        # typo is not hidden behind a missing DiffSynth install. An unusable
+        # name would otherwise save as the same z-image__vNNN file.
+        require_lora_filename(lora_name)
+        weights_list = parse_lora_weights(lora_weights)
+
         if not DIFF_SYNTH_AVAILABLE:
             raise ImportError("DiffSynth-Studio is not installed yet.\nSimply follow the instructions at https://github.com/modelscope/DiffSynth-Studio\nRead the github for more info: https://github.com/by-ae/ae-in-workflow")
 
@@ -270,15 +283,6 @@ class ZImageImagesToLoRANodeAE:
 
             if images.shape[0] == 0:
                 raise ValueError("Images tensor cannot be empty")
-
-            # Parse lora weights from string
-            weights_list = []
-            if lora_weights.strip():
-                try:
-                    weights_list = [float(w.strip()) for w in lora_weights.split(',') if w.strip()]
-                except ValueError:
-                    print(f"Warning: Invalid lora_weights format '{lora_weights}', using equal weights")
-                    weights_list = []
 
             # Process the images
             result_path = process_images_to_lora(images, lora_name, batch_size, weights_list, normalize_saved_lora_strength_to, reduce_size_factor)

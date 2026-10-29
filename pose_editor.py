@@ -245,6 +245,49 @@ def coerce_keypoint_values(pose):
     return values
 
 
+def people_state_from_frames(people_data):
+    """Return keypoints, visible indices, and confidences for each person.
+
+    Raises ValueError when a person cannot be edited. Keypoint numbers may be
+    a list, a NumPy array (flat or shaped as rows of x, y, confidence), or a
+    torch tensor. This is the decoder for opening the editor and for Ctrl+O.
+    """
+    people_keypoints = []
+    people_valid_keypoints = []
+    people_original_confidences = []
+
+    for person_idx, person in enumerate(people_data):
+        if not isinstance(person, dict) or "pose_keypoints_2d" not in person:
+            raise ValueError(f"Person {person_idx} missing 'pose_keypoints_2d' field")
+
+        raw_pose = person["pose_keypoints_2d"]
+        pose = coerce_keypoint_values(raw_pose)
+        if pose is None:
+            raise ValueError(
+                f"Person {person_idx} pose_keypoints_2d must be a sequence of numbers, "
+                f"got {type(raw_pose).__name__}"
+            )
+        if len(pose) % 3 != 0:
+            raise ValueError(
+                f"Person {person_idx} pose_keypoints_2d length must be divisible by 3, got {len(pose)}"
+            )
+        n_points = len(pose) // 3
+        if n_points == 0:
+            raise ValueError(f"Person {person_idx} has no keypoints (empty pose_keypoints_2d)")
+
+        keypoints = [[pose[3 * i], pose[3 * i + 1]] for i in range(n_points)]
+        confidences = [pose[3 * i + 2] for i in range(n_points)]
+        valid_keypoints = [
+            i for i in range(n_points)
+            if (pose[3 * i] != 0.0 or pose[3 * i + 1] != 0.0) and pose[3 * i + 2] > 0.0
+        ]
+        people_keypoints.append(keypoints)
+        people_valid_keypoints.append(valid_keypoints)
+        people_original_confidences.append(confidences)
+
+    return people_keypoints, people_valid_keypoints, people_original_confidences
+
+
 def get_pose_hash(pose_data):
     """Generate a hash for the pose data to use as cache key"""
     pose_str = json.dumps(_to_jsonable(pose_data), sort_keys=True)
@@ -493,6 +536,41 @@ def space_out_people(people_keypoints, people_valid_keypoints):
 
     return spaced_keypoints
 
+def nearest_visible_keypoint(mouse_pos, keypoints, valid_indices, max_distance):
+    """Index of the closest drawn joint within max_distance, or None.
+
+    Joints missing from valid_indices are not targets. On a tie the lower
+    index wins. The boundary distance counts as a hit.
+    """
+    mouse_x, mouse_y = mouse_pos
+    limit = max_distance * max_distance
+    best_i = None
+    best_d2 = limit
+    for index in sorted(valid_indices):
+        if index < 0 or index >= len(keypoints):
+            continue
+        px, py = keypoints[index]
+        distance_sq = (px - mouse_x) ** 2 + (py - mouse_y) ** 2
+        if best_i is None:
+            if distance_sq <= limit:
+                best_i = index
+                best_d2 = distance_sq
+        elif distance_sq < best_d2:
+            best_i = index
+            best_d2 = distance_sq
+    return best_i
+
+
+def saved_keypoint_confidence(index, valid_indices):
+    """1 for a joint that is drawn, otherwise 0.
+
+    Confidence above 0 is not enough. A joint at (0, 0) is hidden, and
+    writing it back as 1 would drop it somewhere else after the pose is
+    moved, so the next open would draw a joint the input did not have.
+    """
+    return 1.0 if index in valid_indices else 0.0
+
+
 def get_closest_person(mouse_pos, people_keypoints, people_valid_keypoints):
     """Find the person with the closest visible keypoint to the mouse position"""
     if not people_keypoints:
@@ -527,6 +605,28 @@ def draw_rotated_ellipse(surface, color, center, width, height, angle):
     rect = rotated_surface.get_rect(center=center)
     # Blit to the main surface
     surface.blit(rotated_surface, rect)
+
+def canvas_placement(points, padding, min_size=64, max_size=4096):
+    """Return canvas width, height, and the offset into that image.
+
+    The canvas is the point bounds plus `padding` on every side. The offset
+    is added to a point so it lands in the rendered image, whose origin is
+    the top-left. A side is at least `min_size` and at most `max_size`.
+    """
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    padded_min_x = min_x - padding
+    padded_max_x = max_x + padding
+    padded_min_y = min_y - padding
+    padded_max_y = max_y + padding
+    raw_w = max(1, math.ceil(padded_max_x - padded_min_x + 1))
+    raw_h = max(1, math.ceil(padded_max_y - padded_min_y + 1))
+    width = min(max(raw_w, min_size), max_size)
+    height = min(max(raw_h, min_size), max_size)
+    return width, height, -padded_min_x, -padded_min_y, raw_w, raw_h
+
 
 def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached_window_position=False):
     """
@@ -628,41 +728,15 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         print("Error: No people found in pose data")
         return None, None
 
-    # Initialize data for each person
-    people_keypoints = []
-    people_valid_keypoints = []
-    people_original_confidences = []  # Store original confidence values
-
-    for person_idx, person in enumerate(people_data):
-        # Validate person structure
-        if "pose_keypoints_2d" not in person:
-            print(f"Error: Person {person_idx} missing 'pose_keypoints_2d' field")
-            return None, None
-        
-        pose = coerce_keypoint_values(person["pose_keypoints_2d"])
-
-        # Validate pose data format
-        if pose is None:
-            print(f"Error: Person {person_idx} pose_keypoints_2d must be a sequence of numbers, got {type(person['pose_keypoints_2d']).__name__}")
-            return None, None
-
-        if len(pose) % 3 != 0:
-            print(f"Error: Person {person_idx} pose_keypoints_2d length must be divisible by 3, got {len(pose)}")
-            return None, None
-        
-        n_points = len(pose) // 3
-        
-        if n_points == 0:
-            print(f"Error: Person {person_idx} has no keypoints (empty pose_keypoints_2d)")
-            return None, None
-        
-        keypoints = [[pose[3*i], pose[3*i+1]] for i in range(n_points)]
-        confidences = [pose[3*i+2] for i in range(n_points)]  # Store original confidences
-        # Valid keypoints must be both at non-zero position AND have confidence > 0
-        valid_keypoints = [i for i in range(n_points) if (pose[3*i] != 0.0 or pose[3*i+1] != 0.0) and pose[3*i+2] > 0.0]
-        people_keypoints.append(keypoints)
-        people_valid_keypoints.append(valid_keypoints)
-        people_original_confidences.append(confidences)
+    try:
+        (
+            people_keypoints,
+            people_valid_keypoints,
+            people_original_confidences,
+        ) = people_state_from_frames(people_data)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return None, None
 
     # Store original positions before spacing (for duplication)
     original_people_keypoints = [keypoints.copy() for keypoints in people_keypoints]
@@ -886,20 +960,11 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                     # Reinitialize with original input
                     try:
                         people_data = original_input[0]["people"]
-                        # Reinitialize all data structures with original input
-                        people_keypoints = []
-                        people_valid_keypoints = []
-                        people_original_confidences = []  # Reinitialize confidences too
-                        for person in people_data:
-                            pose = person["pose_keypoints_2d"]
-                            n_points = len(pose) // 3
-                            keypoints = [[pose[3*i], pose[3*i+1]] for i in range(n_points)]
-                            confidences = [pose[3*i+2] for i in range(n_points)]  # Store original confidences
-                            # Valid keypoints must be both at non-zero position AND have confidence > 0
-                            valid_keypoints = [i for i in range(n_points) if (pose[3*i] != 0.0 or pose[3*i+1] != 0.0) and pose[3*i+2] > 0.0]
-                            people_keypoints.append(keypoints)
-                            people_valid_keypoints.append(valid_keypoints)
-                            people_original_confidences.append(confidences)
+                        (
+                            people_keypoints,
+                            people_valid_keypoints,
+                            people_original_confidences,
+                        ) = people_state_from_frames(people_data)
 
                         # Re-initialize other data structures
                         people_valid_pairs = []
@@ -1046,10 +1111,10 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                     keys = pygame.key.get_pressed()
                     selected_person = get_closest_person(mouse, people_keypoints, people_valid_keypoints)
                     current_keypoints = people_keypoints[selected_person]
-                    n_points = len(current_keypoints)
-                    selected_keypoint = min(range(n_points), key=lambda i: (current_keypoints[i][0] - mouse[0])**2 + (current_keypoints[i][1] - mouse[1])**2)
-                    if (current_keypoints[selected_keypoint][0] - mouse[0])**2 + (current_keypoints[selected_keypoint][1] - mouse[1])**2 > 30**2:
-                        selected_keypoint = None
+                    selected_keypoint = nearest_visible_keypoint(
+                        mouse, current_keypoints, people_valid_keypoints[selected_person], 30
+                    )
+                    if selected_keypoint is None:
                         mouse_down_on_keypoint = None
                     else:
                         mouse_down_on_keypoint = selected_keypoint
@@ -1093,15 +1158,13 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                 keys = pygame.key.get_pressed()
                 selected_person = get_closest_person(mouse, people_keypoints, people_valid_keypoints)
                 current_keypoints = people_keypoints[selected_person]
-                n_points = len(current_keypoints)
 
                 if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:  # Shift+scroll = rotate around nearest keypoint
-                    # Find the closest keypoint to the mouse position
-                    n_points = len(current_keypoints)
-                    closest_keypoint = min(range(n_points), key=lambda i: (current_keypoints[i][0] - mouse[0])**2 + (current_keypoints[i][1] - mouse[1])**2)
-
-                    # Only proceed if the closest keypoint is reasonably close to the mouse
-                    if (current_keypoints[closest_keypoint][0] - mouse[0])**2 + (current_keypoints[closest_keypoint][1] - mouse[1])**2 <= 50**2:
+                    # Only a drawn joint can be the rotation center.
+                    closest_keypoint = nearest_visible_keypoint(
+                        mouse, current_keypoints, people_valid_keypoints[selected_person], 50
+                    )
+                    if closest_keypoint is not None:
                         # Rotate a little faster, it was annoying with the scroll wheel
                         # Not everyone has a free scrolling wheel
                         rotation_delta = 5.0 if event.y > 0 else -5.0
@@ -1306,111 +1369,80 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
 
     if not all_points:
         print("No valid keypoints found, returning empty result")
-        # Return a minimal tensor and empty pose data
+        # The window is still up. Quit before returning, and use the same
+        # frame list as a normal exit so the next node can read it.
+        pygame.quit()
         empty_tensor = torch.zeros(1, 64, 64, 3)
-        return empty_tensor, {"canvas_height": 64, "canvas_width": 64, "people": []}
+        return empty_tensor, [{"canvas_height": 64, "canvas_width": 64, "people": []}]
 
-    if not all_points:
-        # Fallback if no points
-        H, W = 800, 800
+    # Canvas matches the crop drawn below. Saved keypoints add the same offset.
+    W, H, offset_x, offset_y, raw_W, raw_H = canvas_placement(all_points, padding)
+    print(f"Surface size: {W}x{H} (raw: {raw_W}x{raw_H})")
+
+    try:
         surf = pygame.Surface((W, H))
         surf.fill((0, 0, 0))
-    else:
-        # Calculate bounds with symmetric padding
-        # padding parameter passed to function
-        xs = [p[0] for p in all_points]
-        ys = [p[1] for p in all_points]
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-        print(f"Final bounds: x={min_x:.1f} to {max_x:.1f}, y={min_y:.1f} to {max_y:.1f}")
+    except Exception as e:
+        print(f"Failed to create surface {W}x{H}: {e}")
+        # Fallback to a smaller size
+        W, H = 1024, 768
+        surf = pygame.Surface((W, H))
+        surf.fill((0, 0, 0))
+        print(f"Fallback to {W}x{H}")
 
-        # Add symmetric padding to all sides
-        padded_min_x = min_x - padding
-        padded_max_x = max_x + padding
-        padded_min_y = min_y - padding
-        padded_max_y = max_y + padding
+    # Draw all people without additional scaling (cropped to bounds)
+    for person_idx in range(len(people_keypoints)):
+        current_keypoints = people_keypoints[person_idx]
+        valid_pairs = people_valid_pairs[person_idx]
+        valid_colors = people_valid_colors[person_idx]
+        valid_keypoints = people_valid_keypoints[person_idx]
 
-        # Calculate precise dimensions to fit the padded bounds exactly
-        raw_W = max(1, math.ceil(padded_max_x - padded_min_x + 1))
-        raw_H = max(1, math.ceil(padded_max_y - padded_min_y + 1))
+        # Draw bones
+        for (i, j), col in zip(valid_pairs, valid_colors):
+            p1 = np.array([current_keypoints[i][0] + offset_x, current_keypoints[i][1] + offset_y])
+            p2 = np.array([current_keypoints[j][0] + offset_x, current_keypoints[j][1] + offset_y])
 
-        # Cap maximum size to prevent memory issues (4096 is a reasonable limit)
-        MAX_SIZE = 4096
-        W = min(max(raw_W, 64), MAX_SIZE)
-        H = min(max(raw_H, 64), MAX_SIZE)
+            # Calculate center point (mY, mX in OpenPose notation)
+            center = ((p1 + p2) / 2).astype(int)
 
-        print(f"Surface size: {W}x{H} (raw: {raw_W}x{raw_H})")
+            # Calculate distance and angle (matching OpenPose calculation)
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            length = math.sqrt(dx*dx + dy*dy)
+            angle = -math.degrees(math.atan2(dy, dx))  # Negate for correct rotation direction
 
-        # Create surface with calculated bounds
-        try:
-            surf = pygame.Surface((W, H))
-            surf.fill((0, 0, 0))
-        except Exception as e:
-            print(f"Failed to create surface {W}x{H}: {e}")
-            # Fallback to a smaller size
-            W, H = 1024, 768
-            surf = pygame.Surface((W, H))
-            surf.fill((0, 0, 0))
-            print(f"Fallback to {W}x{H}")
+            # Draw rotated ellipse for bone (matching OpenPose style)
+            ellipse_width = max(int(length), 1)
+            ellipse_height = thickness  # stickwidth in OpenPose
+            # Darken colors by 0.6 factor like OpenPose does
+            darkened_col = tuple(int(c * 0.6) for c in col)
+            draw_rotated_ellipse(surf, darkened_col, center, ellipse_width, ellipse_height, angle)
 
-        # Map padded bounds directly to surface bounds (no centering)
-        # This ensures exact padding without any centering artifacts
-        offset_x = -padded_min_x
-        offset_y = -padded_min_y
+        # Draw keypoints with colors matching their connecting bones
+        keypoint_radius = thickness/2.0  # Same radius as the narrow side of bones
 
-        # Draw all people without additional scaling (cropped to bounds)
-        for person_idx in range(len(people_keypoints)):
-            current_keypoints = people_keypoints[person_idx]
-            valid_pairs = people_valid_pairs[person_idx]
-            valid_colors = people_valid_colors[person_idx]
-            valid_keypoints = people_valid_keypoints[person_idx]
+        # Create mapping of keypoints to their connecting bone colors
+        keypoint_colors = {}
+        for (i, j), col in zip(valid_pairs, valid_colors):
+            if i not in keypoint_colors:
+                keypoint_colors[i] = []
+            if j not in keypoint_colors:
+                keypoint_colors[j] = []
+            keypoint_colors[i].append(col)
+            keypoint_colors[j].append(col)
 
-            # Draw bones
-            for (i, j), col in zip(valid_pairs, valid_colors):
-                p1 = np.array([current_keypoints[i][0] + offset_x, current_keypoints[i][1] + offset_y])
-                p2 = np.array([current_keypoints[j][0] + offset_x, current_keypoints[j][1] + offset_y])
+        # Draw keypoints in the bright colors of their connecting bones
+        for i in valid_keypoints:
+            p = current_keypoints[i]
+            sp = (p[0] + offset_x, p[1] + offset_y)
 
-                # Calculate center point (mY, mX in OpenPose notation)
-                center = ((p1 + p2) / 2).astype(int)
-
-                # Calculate distance and angle (matching OpenPose calculation)
-                dx = p2[0] - p1[0]
-                dy = p2[1] - p1[1]
-                length = math.sqrt(dx*dx + dy*dy)
-                angle = -math.degrees(math.atan2(dy, dx))  # Negate for correct rotation direction
-
-                # Draw rotated ellipse for bone (matching OpenPose style)
-                ellipse_width = max(int(length), 1)
-                ellipse_height = thickness  # stickwidth in OpenPose
-                # Darken colors by 0.6 factor like OpenPose does
-                darkened_col = tuple(int(c * 0.6) for c in col)
-                draw_rotated_ellipse(surf, darkened_col, center, ellipse_width, ellipse_height, angle)
-
-            # Draw keypoints with colors matching their connecting bones
-            keypoint_radius = thickness/2.0  # Same radius as the narrow side of bones
-
-            # Create mapping of keypoints to their connecting bone colors
-            keypoint_colors = {}
-            for (i, j), col in zip(valid_pairs, valid_colors):
-                if i not in keypoint_colors:
-                    keypoint_colors[i] = []
-                if j not in keypoint_colors:
-                    keypoint_colors[j] = []
-                keypoint_colors[i].append(col)
-                keypoint_colors[j].append(col)
-
-            # Draw keypoints in the bright colors of their connecting bones
-            for i in valid_keypoints:
-                p = current_keypoints[i]
-                sp = (p[0] + offset_x, p[1] + offset_y)
-
-                if i in keypoint_colors and keypoint_colors[i]:
-                    # Draw keypoint in colors of connecting bones
-                    for col in keypoint_colors[i]:
-                        pygame.draw.circle(surf, col, tuple(map(int, sp)), keypoint_radius)
-                else:
-                    # Draw isolated keypoints in white
-                    pygame.draw.circle(surf, (255, 255, 255), tuple(map(int, sp)), keypoint_radius)
+            if i in keypoint_colors and keypoint_colors[i]:
+                # Draw keypoint in colors of connecting bones
+                for col in keypoint_colors[i]:
+                    pygame.draw.circle(surf, col, tuple(map(int, sp)), keypoint_radius)
+            else:
+                # Draw isolated keypoints in white
+                pygame.draw.circle(surf, (255, 255, 255), tuple(map(int, sp)), keypoint_radius)
 
     # Convert pygame surface to tensor with correct orientation
     arr = surfarray.array3d(surf)
@@ -1455,13 +1487,11 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
     updated_pose_data = {"people": []}
     for person_idx, person_keypoints in enumerate(people_keypoints):
         pose_keypoints_2d = []
-        original_confidences = people_original_confidences[person_idx]
+        valid_indices = people_valid_keypoints[person_idx]
         for keypoint_idx, point in enumerate(person_keypoints):
-            # Use original confidence for keypoints that were originally missing/invalid
-            # Use 1.0 for keypoints that were originally valid (visible and editable)
-            original_conf = original_confidences[keypoint_idx] if keypoint_idx < len(original_confidences) else 0.0
-            confidence = 1.0 if original_conf > 0.0 else 0.0
-            pose_keypoints_2d.extend([point[0], point[1], confidence])
+            confidence = saved_keypoint_confidence(keypoint_idx, valid_indices)
+            # Same shift used to draw the crop, so the list matches the image.
+            pose_keypoints_2d.extend([point[0] + offset_x, point[1] + offset_y, confidence])
         updated_pose_data["people"].append({
             "pose_keypoints_2d": pose_keypoints_2d
         })

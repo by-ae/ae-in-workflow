@@ -159,9 +159,9 @@ Convert images to LoRA (Low-Rank Adaptation) using the Z-Image pipeline from Dif
 
 #### Inputs:
 - **images** (required): Batch of images as tensor (shape: B×H×W×3)
-- **lora_name** (required): Dataset name for the LoRA (default: "my_lora")
+- **lora_name** (required): Dataset name for the LoRA (default: "my_lora"). Letters and digits in any language are kept, spaces become underscores, and other characters are removed. A name with no letters or numbers stops the node
 - **batch_size** (optional): Images to process simultaneously (default: 8, higher = faster but more VRAM)
-- **lora_weights** (optional): Comma-separated weights for each image (e.g., "1.0,2.0,0.5") - leave empty for equal weighting
+- **lora_weights** (optional): Comma-separated weights for each image (e.g., "1.0,2.0,0.5"). Leave empty for equal weighting. A token that is not a finite number stops the node and names the token
 - **normalize_saved_lora_strength_to** (optional): Strength stored in the saved LoRA (default: 1.0). If a result only looked right at loader strength 1.75, set this to 1.75 and loader strength 1.0 matches that
 - **reduce_size_factor** (optional): Batch size for averaging LoRAs (default: 1, higher = smaller final LoRA by averaging groups)
 - **unload_models_before_running** (optional): Unload other ComfyUI models before running (default: True). Set this to False to leave them loaded
@@ -308,11 +308,12 @@ An interactive pose editor that allows users to manipulate OpenPose keypoints wi
 #### Usage Notes:
 - **Initial Input**: Connect pose data from an OpenPose preprocessor or ControlNet, or leave the input empty for a T-pose
 - **Validation**: Malformed data (no people, a missing `pose_keypoints_2d`, or a length not divisible by 3) raises an error and does not open the window
-- **Numeric types**: Keypoint values may be plain numbers, NumPy scalars, a NumPy array, or a PyTorch tensor of numbers. The editor opens on those instead of returning a black image
+- **Numeric types**: Keypoint values may be plain numbers, NumPy scalars, a NumPy array (flat or rows of x, y, confidence), or a PyTorch tensor of numbers. The editor opens on those instead of returning a black image. Ctrl+O decodes the original input the same way, so a reset can be saved
 - **Keypoints**: 18 points in the order listed above, the layout used by the common ControlNet OpenPose preprocessor
-- **Confidence Values**: Only keypoints with confidence above 0.0 and a non-zero position are drawn and can be dragged
+- **Confidence Values**: Only keypoints with confidence above 0.0 and a non-zero position are drawn and can be dragged. The saved pose uses confidence 1 for those joints and 0 for the rest, so a joint stored at (0, 0) does not come back as a new point
 - **Window**: Position and size are remembered. If the window is off screen, turn on `reset_cached_window_position` once
 - **Output Format**: `edited_pose_data` can be passed into another Pose Editor or into nodes that take this 18-keypoint list
+- **Coordinates**: Saved keypoints use the rendered image. The origin is that image's top-left, and `padding` is inside the image, so a joint lines up with the picture
 
 ### Interpolate Float List (ae)
 

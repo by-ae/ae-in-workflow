@@ -24,9 +24,39 @@ def open_image(path):
     return transposed
 
 
+# Extensions the selector treats as images. Matching is case-insensitive.
+SUPPORTED_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp')
+
+
+def list_loadable_image_paths(folder_path):
+    """Return paths of images that open, without keeping the decoded files.
+
+    The selector only needs paths until a thumbnail or the output batch is
+    built. Holding every opened image used the memory and file handles of
+    the whole folder at once.
+    """
+    paths = []
+    if not folder_path or not os.path.exists(folder_path):
+        return paths
+
+    for file in os.listdir(folder_path):
+        if not file.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
+            continue
+        path = os.path.join(folder_path, file)
+        try:
+            img = open_image(path)
+            try:
+                img.load()
+            finally:
+                img.close()
+            paths.append(path)
+        except Exception as e:
+            print(f"Failed to load {path}: {e}")
+    return paths
+
+
 def load_images_from_folder(folder_path):
     """Load all image files from folder"""
-    supported_formats = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp')
     images = []
     paths = []
 
@@ -34,7 +64,7 @@ def load_images_from_folder(folder_path):
         return images, paths
 
     for file in os.listdir(folder_path):
-        if file.lower().endswith(supported_formats):
+        if file.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
             path = os.path.join(folder_path, file)
             try:
                 img = open_image(path)
@@ -134,8 +164,8 @@ def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, 
     """Load folder contents asynchronously"""
     def load_task():
         try:
-            # Load images from folder
-            _, paths = load_images_from_folder(folder_path)
+            # Paths only. The decoded files are closed inside the lister.
+            paths = list_loadable_image_paths(folder_path)
             # Sort them
             paths = sort_image_paths(paths, sort_modes[sort_mode_index], sort_ascending)
             # Call back with results
@@ -147,6 +177,17 @@ def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, 
     thread = threading.Thread(target=load_task, daemon=True)
     thread.start()
     return thread
+
+def selection_toggle_label(selected_count, total_count):
+    """Label for the image selector's select-all button.
+
+    When every image is selected the click clears that selection, so the
+    label has to say so. An empty folder stays on SELECT ALL.
+    """
+    if total_count > 0 and selected_count == total_count:
+        return "DESELECT ALL"
+    return "SELECT ALL"
+
 
 def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     """Convert hex color string to RGB tuple
@@ -361,16 +402,19 @@ class LazyImageLoader:
             self.loading_queue.add(path)
             try:
                 img = open_image(path)
-                # Resize more efficiently
-                img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
-                # Create square thumbnail by padding
-                thumb = Image.new('RGB', self.thumbnail_size, (0, 0, 0))
-                x = (self.thumbnail_size[0] - img.width) // 2
-                y = (self.thumbnail_size[1] - img.height) // 2
-                thumb.paste(img, (x, y))
+                try:
+                    # Resize more efficiently
+                    img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+                    # Create square thumbnail by padding
+                    thumb = Image.new('RGB', self.thumbnail_size, (0, 0, 0))
+                    x = (self.thumbnail_size[0] - img.width) // 2
+                    y = (self.thumbnail_size[1] - img.height) // 2
+                    thumb.paste(img, (x, y))
 
-                # Convert PIL to pygame surface
-                thumb_surface = pygame.image.fromstring(thumb.tobytes(), thumb.size, 'RGB')
+                    # Convert PIL to pygame surface
+                    thumb_surface = pygame.image.fromstring(thumb.tobytes(), thumb.size, 'RGB')
+                finally:
+                    img.close()
 
                 # Add to cache
                 self.cache[path] = (thumb_surface, self.access_counter)
@@ -467,8 +511,7 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
 
     running = True
     clock = pygame.time.Clock()
-    select_all = False
-    
+
     # Button position variables (calculated each frame but initialized here to avoid undefined name errors)
     select_all_x = 10
     sort_mode_x = 150
@@ -516,11 +559,11 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                         # Check if click is on control buttons
                         button_y = screen_height - 70
                         if button_y <= mouse_y <= button_y + 20:
-                            # Select All button
-                            select_all_text = "SELECT ALL" if len(selected_paths) != len(paths) else "DESELECT ALL"
-                            select_all_surface = render_text_with_outline(font, select_all_text, TEXT_COLOR)
+                            # Select All button. Width matches the drawn label.
+                            select_all_text = selection_toggle_label(len(selected_paths), len(paths))
+                            select_all_surface = font.render(select_all_text, True, TEXT_COLOR)
                             if select_all_x <= mouse_x <= select_all_x + select_all_surface.get_width():
-                                if len(selected_paths) != len(paths):
+                                if select_all_text == "SELECT ALL":
                                     # Select all in current sorted order
                                     selected_paths = paths.copy()
                                     selected_path_set = set(paths)
@@ -626,7 +669,7 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
         button_y = screen_height - 70
 
         # Select All button
-        select_all_text = "SELECT ALL" if not select_all else "DESELECT ALL"
+        select_all_text = selection_toggle_label(len(selected_paths), len(paths))
         select_all_surface = font.render(select_all_text, True, TEXT_COLOR)
         select_all_x = 10
         pygame.draw.rect(screen, THUMB_BG, (select_all_x - 5, button_y - 5, select_all_surface.get_width() + 10, select_all_surface.get_height() + 10))
@@ -889,7 +932,7 @@ def load_selected_images(paths):
 def image_selector(folder_path, target_width_param=None, target_height_param=None, padding_color="#000000"):
     """Main function: load image paths, show UI, process selection"""
     # Only load paths initially, not images
-    _, paths = load_images_from_folder(folder_path)
+    paths = list_loadable_image_paths(folder_path)
 
     if not paths:
         # Return empty results if no images found

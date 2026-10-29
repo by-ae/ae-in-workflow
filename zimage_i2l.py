@@ -1,5 +1,6 @@
 # Check for DiffSynth-Studio availability
 from typing import Any, List, Tuple, Optional, Callable
+import math
 import re
 import os
 
@@ -29,17 +30,65 @@ ZIMAGE_AVAILABLE = DIFF_SYNTH_AVAILABLE and DEPENDENCIES_AVAILABLE
 
 
 def sanitize_lora_name(name: str) -> str:
-    """Convert to lowercase and replace spaces/special chars with underscores
-    
-    Args:
-        name: Raw lora name string
-        
-    Returns:
-        Sanitized lora name safe for use in filenames
+    """Keep letters and digits, lowercase, and turn spaces into underscores.
+
+    Letters from any language count. Other characters, including underscores
+    and punctuation, are removed so the result can be used in a filename.
+    Leading and trailing space is removed before spaces are collapsed. An
+    empty string means the name had no letters or digits.
     """
-    name = re.sub(r'[^a-zA-Z0-9\s]', '', name).lower()
-    name = re.sub(r'\s+', '_', name)
-    return name
+    if not isinstance(name, str):
+        raise ValueError(f"lora_name must be a string, got {type(name).__name__}")
+    kept = "".join(ch for ch in name if ch.isalnum() or ch.isspace())
+    kept = kept.strip().lower()
+    return re.sub(r"\s+", "_", kept)
+
+
+def require_lora_filename(name: str) -> str:
+    """Return a non-empty filename stem, or raise ValueError."""
+    sanitized = sanitize_lora_name(name)
+    if not sanitized:
+        raise ValueError(
+            "lora_name needs at least one letter or number. "
+            f"Got {name!r}, which is empty after removing characters that cannot go in a filename."
+        )
+    return sanitized
+
+
+def parse_lora_weights(lora_weights: str) -> List[float]:
+    """Parse comma-separated image weights. An empty string means equal weights.
+
+    A token that is not a finite number raises ValueError and names that
+    token. The node used to ignore the whole list and save equal weights.
+    """
+    if not isinstance(lora_weights, str):
+        raise ValueError(
+            "lora_weights must be a comma-separated string of numbers, "
+            f"got {type(lora_weights).__name__}"
+        )
+    if not lora_weights.strip():
+        return []
+    weights = []
+    invalid = []
+    for token in lora_weights.split(","):
+        token = token.strip()
+        if token == "":
+            continue
+        try:
+            value = float(token)
+        except ValueError:
+            invalid.append(token)
+            continue
+        if not math.isfinite(value):
+            invalid.append(token)
+            continue
+        weights.append(value)
+    if invalid:
+        shown = ", ".join(invalid[:5])
+        raise ValueError(
+            f"lora_weights must be comma-separated numbers; could not parse: {shown}"
+        )
+    return weights
 
 def find_next_version(base_path: str) -> str:
     """Find the next available version number (000, 001, 002, etc.)
@@ -216,6 +265,8 @@ if DIFF_SYNTH_AVAILABLE:
     def process_images_to_lora(images_tensor, lora_name, batch_size, lora_weights=None, normalized_strength=1.0, reduce_size_factor=1):
         if lora_weights is None:
             lora_weights = []
+        # Reject a name that would save as z-image__vNNN before any model work.
+        sanitized_name = require_lora_filename(lora_name)
         # Convert tensor to PIL images (assuming shape N, H, W, 3)
         images = []
         for i in range(images_tensor.shape[0]):
@@ -224,9 +275,6 @@ if DIFF_SYNTH_AVAILABLE:
             img_array = (img_tensor * 255).clamp(0, 255).byte().cpu().numpy()
             img = Image.fromarray(img_array)
             images.append(img)
-
-        # Sanitize lora name
-        sanitized_name = sanitize_lora_name(lora_name)
 
         # Setup folders and paths using ComfyUI's folder_paths system
         lora_folders = folder_paths.get_folder_paths("loras")
@@ -306,6 +354,7 @@ else:
     def process_images_to_lora(images_tensor, lora_name, batch_size, lora_weights=None, normalized_strength=1.0, reduce_size_factor=1):
         if lora_weights is None:
             lora_weights = []
+        require_lora_filename(lora_name)
         raise ImportError("DiffSynth-Studio is not installed. Please install it following the instructions at https://github.com/modelscope/DiffSynth-Studio")
 
 # Module exports for ComfyUI node

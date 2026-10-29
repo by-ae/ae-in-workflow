@@ -249,6 +249,72 @@ def test_sort_image_paths():
     assert result == ['/path/c.jpg', '/path/b.jpg', '/path/a.jpg']
 
 
+def test_list_loadable_image_paths_closes_files(tmp_path, monkeypatch):
+    """Browsing a folder must not keep every decoded image open."""
+    from image_selector import list_loadable_image_paths, open_image
+
+    Image.new('RGB', (4, 4), 'red').save(tmp_path / 'a.png')
+    Image.new('RGB', (4, 4), 'blue').save(tmp_path / 'b.tif')
+    (tmp_path / 'notes.txt').write_text('not an image', encoding='utf-8')
+    (tmp_path / 'bad.png').write_bytes(b'not a png')
+
+    closed = []
+    real_open = open_image
+
+    def tracking(path):
+        img = real_open(path)
+        original_close = img.close
+
+        def close():
+            closed.append(os.path.basename(path))
+            return original_close()
+
+        img.close = close
+        return img
+
+    monkeypatch.setattr('image_selector.open_image', tracking)
+    names = sorted(os.path.basename(path) for path in list_loadable_image_paths(str(tmp_path)))
+    assert names == ['a.png', 'b.tif']
+    # A file that fails to open is not returned. Every file that did open is closed.
+    assert set(closed) >= {'a.png', 'b.tif'}
+
+
+def test_thumbnail_loader_closes_the_image(tmp_path, monkeypatch):
+    """A preview must not leave the source file open."""
+    from image_selector import LazyImageLoader, open_image
+
+    path = tmp_path / 'a.png'
+    Image.new('RGB', (30, 20), 'blue').save(path)
+    closed = []
+    real_open = open_image
+
+    def tracking(image_path):
+        img = real_open(image_path)
+        original_close = img.close
+
+        def close():
+            closed.append(True)
+            return original_close()
+
+        img.close = close
+        return img
+
+    monkeypatch.setattr('image_selector.open_image', tracking)
+    thumb = LazyImageLoader([str(path)], thumbnail_size=(16, 16)).get_thumbnail(str(path))
+    assert thumb is not None
+    assert closed == [True]
+
+
+def test_selection_toggle_label():
+    """The button must say DESELECT ALL only when the click would clear everything."""
+    from image_selector import selection_toggle_label
+
+    assert selection_toggle_label(0, 4) == "SELECT ALL"
+    assert selection_toggle_label(3, 4) == "SELECT ALL"
+    assert selection_toggle_label(4, 4) == "DESELECT ALL"
+    assert selection_toggle_label(0, 0) == "SELECT ALL"
+
+
 def test_build_folder_tree():
     """Test folder tree building"""
     from image_selector import build_folder_tree
