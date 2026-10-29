@@ -313,6 +313,7 @@ An interactive pose editor that allows users to manipulate OpenPose keypoints wi
 - **Confidence Values**: Only keypoints with confidence above 0.0 and a non-zero position are drawn and can be dragged
 - **Window**: Position and size are remembered. If the window is off screen, turn on `reset_cached_window_position` once
 - **Output Format**: `edited_pose_data` can be passed into another Pose Editor or into nodes that take this 18-keypoint list
+- **Coordinates**: Saved keypoints use the rendered image. The origin is that image's top-left, and `padding` is inside the image, so a joint lines up with the picture
 
 ### Interpolate Float List (ae)
 

@@ -528,6 +528,28 @@ def draw_rotated_ellipse(surface, color, center, width, height, angle):
     # Blit to the main surface
     surface.blit(rotated_surface, rect)
 
+def canvas_placement(points, padding, min_size=64, max_size=4096):
+    """Return canvas width, height, and the offset into that image.
+
+    The canvas is the point bounds plus `padding` on every side. The offset
+    is added to a point so it lands in the rendered image, whose origin is
+    the top-left. A side is at least `min_size` and at most `max_size`.
+    """
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    padded_min_x = min_x - padding
+    padded_max_x = max_x + padding
+    padded_min_y = min_y - padding
+    padded_max_y = max_y + padding
+    raw_w = max(1, math.ceil(padded_max_x - padded_min_x + 1))
+    raw_h = max(1, math.ceil(padded_max_y - padded_min_y + 1))
+    width = min(max(raw_w, min_size), max_size)
+    height = min(max(raw_h, min_size), max_size)
+    return width, height, -padded_min_x, -padded_min_y, raw_w, raw_h
+
+
 def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached_window_position=False):
     """
     Pose Editor - by-ae
@@ -1310,107 +1332,74 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         empty_tensor = torch.zeros(1, 64, 64, 3)
         return empty_tensor, {"canvas_height": 64, "canvas_width": 64, "people": []}
 
-    if not all_points:
-        # Fallback if no points
-        H, W = 800, 800
+    # Canvas matches the crop drawn below. Saved keypoints add the same offset.
+    W, H, offset_x, offset_y, raw_W, raw_H = canvas_placement(all_points, padding)
+    print(f"Surface size: {W}x{H} (raw: {raw_W}x{raw_H})")
+
+    try:
         surf = pygame.Surface((W, H))
         surf.fill((0, 0, 0))
-    else:
-        # Calculate bounds with symmetric padding
-        # padding parameter passed to function
-        xs = [p[0] for p in all_points]
-        ys = [p[1] for p in all_points]
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-        print(f"Final bounds: x={min_x:.1f} to {max_x:.1f}, y={min_y:.1f} to {max_y:.1f}")
+    except Exception as e:
+        print(f"Failed to create surface {W}x{H}: {e}")
+        # Fallback to a smaller size
+        W, H = 1024, 768
+        surf = pygame.Surface((W, H))
+        surf.fill((0, 0, 0))
+        print(f"Fallback to {W}x{H}")
 
-        # Add symmetric padding to all sides
-        padded_min_x = min_x - padding
-        padded_max_x = max_x + padding
-        padded_min_y = min_y - padding
-        padded_max_y = max_y + padding
+    # Draw all people without additional scaling (cropped to bounds)
+    for person_idx in range(len(people_keypoints)):
+        current_keypoints = people_keypoints[person_idx]
+        valid_pairs = people_valid_pairs[person_idx]
+        valid_colors = people_valid_colors[person_idx]
+        valid_keypoints = people_valid_keypoints[person_idx]
 
-        # Calculate precise dimensions to fit the padded bounds exactly
-        raw_W = max(1, math.ceil(padded_max_x - padded_min_x + 1))
-        raw_H = max(1, math.ceil(padded_max_y - padded_min_y + 1))
+        # Draw bones
+        for (i, j), col in zip(valid_pairs, valid_colors):
+            p1 = np.array([current_keypoints[i][0] + offset_x, current_keypoints[i][1] + offset_y])
+            p2 = np.array([current_keypoints[j][0] + offset_x, current_keypoints[j][1] + offset_y])
 
-        # Cap maximum size to prevent memory issues (4096 is a reasonable limit)
-        MAX_SIZE = 4096
-        W = min(max(raw_W, 64), MAX_SIZE)
-        H = min(max(raw_H, 64), MAX_SIZE)
+            # Calculate center point (mY, mX in OpenPose notation)
+            center = ((p1 + p2) / 2).astype(int)
 
-        print(f"Surface size: {W}x{H} (raw: {raw_W}x{raw_H})")
+            # Calculate distance and angle (matching OpenPose calculation)
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            length = math.sqrt(dx*dx + dy*dy)
+            angle = -math.degrees(math.atan2(dy, dx))  # Negate for correct rotation direction
 
-        # Create surface with calculated bounds
-        try:
-            surf = pygame.Surface((W, H))
-            surf.fill((0, 0, 0))
-        except Exception as e:
-            print(f"Failed to create surface {W}x{H}: {e}")
-            # Fallback to a smaller size
-            W, H = 1024, 768
-            surf = pygame.Surface((W, H))
-            surf.fill((0, 0, 0))
-            print(f"Fallback to {W}x{H}")
+            # Draw rotated ellipse for bone (matching OpenPose style)
+            ellipse_width = max(int(length), 1)
+            ellipse_height = thickness  # stickwidth in OpenPose
+            # Darken colors by 0.6 factor like OpenPose does
+            darkened_col = tuple(int(c * 0.6) for c in col)
+            draw_rotated_ellipse(surf, darkened_col, center, ellipse_width, ellipse_height, angle)
 
-        # Map padded bounds directly to surface bounds (no centering)
-        # This ensures exact padding without any centering artifacts
-        offset_x = -padded_min_x
-        offset_y = -padded_min_y
+        # Draw keypoints with colors matching their connecting bones
+        keypoint_radius = thickness/2.0  # Same radius as the narrow side of bones
 
-        # Draw all people without additional scaling (cropped to bounds)
-        for person_idx in range(len(people_keypoints)):
-            current_keypoints = people_keypoints[person_idx]
-            valid_pairs = people_valid_pairs[person_idx]
-            valid_colors = people_valid_colors[person_idx]
-            valid_keypoints = people_valid_keypoints[person_idx]
+        # Create mapping of keypoints to their connecting bone colors
+        keypoint_colors = {}
+        for (i, j), col in zip(valid_pairs, valid_colors):
+            if i not in keypoint_colors:
+                keypoint_colors[i] = []
+            if j not in keypoint_colors:
+                keypoint_colors[j] = []
+            keypoint_colors[i].append(col)
+            keypoint_colors[j].append(col)
 
-            # Draw bones
-            for (i, j), col in zip(valid_pairs, valid_colors):
-                p1 = np.array([current_keypoints[i][0] + offset_x, current_keypoints[i][1] + offset_y])
-                p2 = np.array([current_keypoints[j][0] + offset_x, current_keypoints[j][1] + offset_y])
+        # Draw keypoints in the bright colors of their connecting bones
+        for i in valid_keypoints:
+            p = current_keypoints[i]
+            sp = (p[0] + offset_x, p[1] + offset_y)
 
-                # Calculate center point (mY, mX in OpenPose notation)
-                center = ((p1 + p2) / 2).astype(int)
-
-                # Calculate distance and angle (matching OpenPose calculation)
-                dx = p2[0] - p1[0]
-                dy = p2[1] - p1[1]
-                length = math.sqrt(dx*dx + dy*dy)
-                angle = -math.degrees(math.atan2(dy, dx))  # Negate for correct rotation direction
-
-                # Draw rotated ellipse for bone (matching OpenPose style)
-                ellipse_width = max(int(length), 1)
-                ellipse_height = thickness  # stickwidth in OpenPose
-                # Darken colors by 0.6 factor like OpenPose does
-                darkened_col = tuple(int(c * 0.6) for c in col)
-                draw_rotated_ellipse(surf, darkened_col, center, ellipse_width, ellipse_height, angle)
-
-            # Draw keypoints with colors matching their connecting bones
-            keypoint_radius = thickness/2.0  # Same radius as the narrow side of bones
-
-            # Create mapping of keypoints to their connecting bone colors
-            keypoint_colors = {}
-            for (i, j), col in zip(valid_pairs, valid_colors):
-                if i not in keypoint_colors:
-                    keypoint_colors[i] = []
-                if j not in keypoint_colors:
-                    keypoint_colors[j] = []
-                keypoint_colors[i].append(col)
-                keypoint_colors[j].append(col)
-
-            # Draw keypoints in the bright colors of their connecting bones
-            for i in valid_keypoints:
-                p = current_keypoints[i]
-                sp = (p[0] + offset_x, p[1] + offset_y)
-
-                if i in keypoint_colors and keypoint_colors[i]:
-                    # Draw keypoint in colors of connecting bones
-                    for col in keypoint_colors[i]:
-                        pygame.draw.circle(surf, col, tuple(map(int, sp)), keypoint_radius)
-                else:
-                    # Draw isolated keypoints in white
-                    pygame.draw.circle(surf, (255, 255, 255), tuple(map(int, sp)), keypoint_radius)
+            if i in keypoint_colors and keypoint_colors[i]:
+                # Draw keypoint in colors of connecting bones
+                for col in keypoint_colors[i]:
+                    pygame.draw.circle(surf, col, tuple(map(int, sp)), keypoint_radius)
+            else:
+                # Draw isolated keypoints in white
+                pygame.draw.circle(surf, (255, 255, 255), tuple(map(int, sp)), keypoint_radius)
 
     # Convert pygame surface to tensor with correct orientation
     arr = surfarray.array3d(surf)
@@ -1461,7 +1450,8 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
             # Use 1.0 for keypoints that were originally valid (visible and editable)
             original_conf = original_confidences[keypoint_idx] if keypoint_idx < len(original_confidences) else 0.0
             confidence = 1.0 if original_conf > 0.0 else 0.0
-            pose_keypoints_2d.extend([point[0], point[1], confidence])
+            # Same shift used to draw the crop, so the list matches the image.
+            pose_keypoints_2d.extend([point[0] + offset_x, point[1] + offset_y, confidence])
         updated_pose_data["people"].append({
             "pose_keypoints_2d": pose_keypoints_2d
         })

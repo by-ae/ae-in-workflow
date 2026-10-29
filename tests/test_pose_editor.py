@@ -386,6 +386,37 @@ def test_get_nearest_bone():
     assert len(nearest) == 2
 
 
+def test_canvas_placement_keeps_padding_around_the_pose():
+    """Saved points use the same origin as the cropped render."""
+    from pose_editor import canvas_placement
+
+    # Large enough that the 64px minimum does not add extra space.
+    width, height, offset_x, offset_y, raw_w, raw_h = canvas_placement(
+        [(0, 0), (200, 180)], padding=10
+    )
+    assert (width, height) == (raw_w, raw_h) == (221, 201)
+    # The leftmost and topmost points sit `padding` pixels in from the edge.
+    assert 0 + offset_x == 10
+    assert 0 + offset_y == 10
+    # The right and bottom padding is the same, on the last pixel of the canvas.
+    assert width - 1 - (200 + offset_x) == 10
+    assert height - 1 - (180 + offset_y) == 10
+
+
+def test_canvas_placement_clamps_to_minimum_and_maximum():
+    """A tiny pose still gets a 64px canvas, and a huge one stops at 4096."""
+    from pose_editor import canvas_placement
+
+    width, height, _, _, raw_w, raw_h = canvas_placement([(0, 0), (10, 4)], padding=0)
+    assert raw_w == 11 and raw_h == 5
+    assert width == 64 and height == 64
+
+    width, height, _, _, raw_w, _ = canvas_placement([(0, 0), (10000, 5)], padding=0)
+    assert raw_w == 10001
+    assert width == 4096
+    assert height == 64
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS
