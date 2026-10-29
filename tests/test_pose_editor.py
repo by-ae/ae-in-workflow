@@ -403,6 +403,35 @@ def test_canvas_placement_keeps_padding_around_the_pose():
     assert height - 1 - (180 + offset_y) == 10
 
 
+def test_nearest_visible_keypoint_ignores_hidden_joints():
+    """A hidden joint under the cursor must not steal the drag or the rotation."""
+    from pose_editor import nearest_visible_keypoint
+
+    keypoints = [[0, 0], [40, 0], [80, 0]]
+    # Index 0 is hidden even though it is closest to the cursor.
+    visible = [1, 2]
+    assert nearest_visible_keypoint((0, 0), keypoints, visible, 30) is None
+    assert nearest_visible_keypoint((40, 0), keypoints, visible, 30) == 1
+    assert nearest_visible_keypoint((70, 0), keypoints, visible, 30) == 2
+    # The boundary counts. One pixel past it does not.
+    assert nearest_visible_keypoint((40, 30), keypoints, visible, 30) == 1
+    assert nearest_visible_keypoint((40, 31), keypoints, visible, 30) is None
+    # A tie keeps the lower index.
+    tied = [[0, 0], [10, 0], [10, 0]]
+    assert nearest_visible_keypoint((10, 0), tied, [1, 2], 5) == 1
+    assert nearest_visible_keypoint((10, 0), tied, [], 5) is None
+
+
+def test_saved_keypoint_confidence_stays_zero_when_hidden():
+    """A positive stored confidence does not make a hidden joint visible again."""
+    from pose_editor import saved_keypoint_confidence
+
+    visible = [0, 2]
+    assert saved_keypoint_confidence(0, visible) == 1.0
+    assert saved_keypoint_confidence(1, visible) == 0.0
+    assert saved_keypoint_confidence(2, visible) == 1.0
+
+
 def test_canvas_placement_clamps_to_minimum_and_maximum():
     """A tiny pose still gets a 64px canvas, and a huge one stops at 4096."""
     from pose_editor import canvas_placement

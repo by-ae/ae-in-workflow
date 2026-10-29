@@ -310,7 +310,7 @@ An interactive pose editor that allows users to manipulate OpenPose keypoints wi
 - **Validation**: Malformed data (no people, a missing `pose_keypoints_2d`, or a length not divisible by 3) raises an error and does not open the window
 - **Numeric types**: Keypoint values may be plain numbers, NumPy scalars, a NumPy array, or a PyTorch tensor of numbers. The editor opens on those instead of returning a black image
 - **Keypoints**: 18 points in the order listed above, the layout used by the common ControlNet OpenPose preprocessor
-- **Confidence Values**: Only keypoints with confidence above 0.0 and a non-zero position are drawn and can be dragged
+- **Confidence Values**: Only keypoints with confidence above 0.0 and a non-zero position are drawn and can be dragged. The saved pose uses confidence 1 for those joints and 0 for the rest, so a joint stored at (0, 0) does not come back as a new point
 - **Window**: Position and size are remembered. If the window is off screen, turn on `reset_cached_window_position` once
 - **Output Format**: `edited_pose_data` can be passed into another Pose Editor or into nodes that take this 18-keypoint list
 - **Coordinates**: Saved keypoints use the rendered image. The origin is that image's top-left, and `padding` is inside the image, so a joint lines up with the picture

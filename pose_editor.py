@@ -493,6 +493,41 @@ def space_out_people(people_keypoints, people_valid_keypoints):
 
     return spaced_keypoints
 
+def nearest_visible_keypoint(mouse_pos, keypoints, valid_indices, max_distance):
+    """Index of the closest drawn joint within max_distance, or None.
+
+    Joints missing from valid_indices are not targets. On a tie the lower
+    index wins. The boundary distance counts as a hit.
+    """
+    mouse_x, mouse_y = mouse_pos
+    limit = max_distance * max_distance
+    best_i = None
+    best_d2 = limit
+    for index in sorted(valid_indices):
+        if index < 0 or index >= len(keypoints):
+            continue
+        px, py = keypoints[index]
+        distance_sq = (px - mouse_x) ** 2 + (py - mouse_y) ** 2
+        if best_i is None:
+            if distance_sq <= limit:
+                best_i = index
+                best_d2 = distance_sq
+        elif distance_sq < best_d2:
+            best_i = index
+            best_d2 = distance_sq
+    return best_i
+
+
+def saved_keypoint_confidence(index, valid_indices):
+    """1 for a joint that is drawn, otherwise 0.
+
+    Confidence above 0 is not enough. A joint at (0, 0) is hidden, and
+    writing it back as 1 would drop it somewhere else after the pose is
+    moved, so the next open would draw a joint the input did not have.
+    """
+    return 1.0 if index in valid_indices else 0.0
+
+
 def get_closest_person(mouse_pos, people_keypoints, people_valid_keypoints):
     """Find the person with the closest visible keypoint to the mouse position"""
     if not people_keypoints:
@@ -1068,10 +1103,10 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                     keys = pygame.key.get_pressed()
                     selected_person = get_closest_person(mouse, people_keypoints, people_valid_keypoints)
                     current_keypoints = people_keypoints[selected_person]
-                    n_points = len(current_keypoints)
-                    selected_keypoint = min(range(n_points), key=lambda i: (current_keypoints[i][0] - mouse[0])**2 + (current_keypoints[i][1] - mouse[1])**2)
-                    if (current_keypoints[selected_keypoint][0] - mouse[0])**2 + (current_keypoints[selected_keypoint][1] - mouse[1])**2 > 30**2:
-                        selected_keypoint = None
+                    selected_keypoint = nearest_visible_keypoint(
+                        mouse, current_keypoints, people_valid_keypoints[selected_person], 30
+                    )
+                    if selected_keypoint is None:
                         mouse_down_on_keypoint = None
                     else:
                         mouse_down_on_keypoint = selected_keypoint
@@ -1115,15 +1150,13 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                 keys = pygame.key.get_pressed()
                 selected_person = get_closest_person(mouse, people_keypoints, people_valid_keypoints)
                 current_keypoints = people_keypoints[selected_person]
-                n_points = len(current_keypoints)
 
                 if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:  # Shift+scroll = rotate around nearest keypoint
-                    # Find the closest keypoint to the mouse position
-                    n_points = len(current_keypoints)
-                    closest_keypoint = min(range(n_points), key=lambda i: (current_keypoints[i][0] - mouse[0])**2 + (current_keypoints[i][1] - mouse[1])**2)
-
-                    # Only proceed if the closest keypoint is reasonably close to the mouse
-                    if (current_keypoints[closest_keypoint][0] - mouse[0])**2 + (current_keypoints[closest_keypoint][1] - mouse[1])**2 <= 50**2:
+                    # Only a drawn joint can be the rotation center.
+                    closest_keypoint = nearest_visible_keypoint(
+                        mouse, current_keypoints, people_valid_keypoints[selected_person], 50
+                    )
+                    if closest_keypoint is not None:
                         # Rotate a little faster, it was annoying with the scroll wheel
                         # Not everyone has a free scrolling wheel
                         rotation_delta = 5.0 if event.y > 0 else -5.0
@@ -1328,9 +1361,11 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
 
     if not all_points:
         print("No valid keypoints found, returning empty result")
-        # Return a minimal tensor and empty pose data
+        # The window is still up. Quit before returning, and use the same
+        # frame list as a normal exit so the next node can read it.
+        pygame.quit()
         empty_tensor = torch.zeros(1, 64, 64, 3)
-        return empty_tensor, {"canvas_height": 64, "canvas_width": 64, "people": []}
+        return empty_tensor, [{"canvas_height": 64, "canvas_width": 64, "people": []}]
 
     # Canvas matches the crop drawn below. Saved keypoints add the same offset.
     W, H, offset_x, offset_y, raw_W, raw_H = canvas_placement(all_points, padding)
@@ -1444,12 +1479,9 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
     updated_pose_data = {"people": []}
     for person_idx, person_keypoints in enumerate(people_keypoints):
         pose_keypoints_2d = []
-        original_confidences = people_original_confidences[person_idx]
+        valid_indices = people_valid_keypoints[person_idx]
         for keypoint_idx, point in enumerate(person_keypoints):
-            # Use original confidence for keypoints that were originally missing/invalid
-            # Use 1.0 for keypoints that were originally valid (visible and editable)
-            original_conf = original_confidences[keypoint_idx] if keypoint_idx < len(original_confidences) else 0.0
-            confidence = 1.0 if original_conf > 0.0 else 0.0
+            confidence = saved_keypoint_confidence(keypoint_idx, valid_indices)
             # Same shift used to draw the crop, so the list matches the image.
             pose_keypoints_2d.extend([point[0] + offset_x, point[1] + offset_y, confidence])
         updated_pose_data["people"].append({
