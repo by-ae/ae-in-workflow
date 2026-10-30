@@ -421,6 +421,25 @@ class ImageSelectorNodeAE:
             raise e
 
 
+def normalize_mask_batch(masks):
+    """Return a mask batch shaped (batch, height, width).
+
+    A lone mask is (height, width). A mask copied from an image often keeps a
+    size-1 channel, either (batch, height, width, 1) or (batch, 1, height, width).
+    Those are the same mask. Anything else is returned unchanged so the caller
+    can report the shape it actually received.
+    """
+    if not isinstance(masks, torch.Tensor):
+        return masks
+    if masks.ndim == 2:
+        return masks.unsqueeze(0)
+    if masks.ndim == 4 and masks.shape[-1] == 1:
+        return masks.squeeze(-1)
+    if masks.ndim == 4 and masks.shape[1] == 1:
+        return masks.squeeze(1)
+    return masks
+
+
 # ComfyUI node class for Crop Image Batch to Mask Bounds
 class CropImageBatchToMaskBoundsNodeAE:
     """
@@ -435,7 +454,7 @@ class CropImageBatchToMaskBoundsNodeAE:
         return {
             "required": {
                 "images": ("IMAGE", {"tooltip": "Batch of images to crop (shape: B,H,W,C)"}),
-                "masks": ("MASK", {"tooltip": "Batch of masks defining crop boundaries (shape: B,H,W)"}),
+                "masks": ("MASK", {"tooltip": "Batch of masks defining crop boundaries (shape: B,H,W). A single (H,W) mask is accepted, as is a size-1 channel on either side."}),
             },
             "optional": {
                 "invert_mask": ("BOOLEAN", {
@@ -507,7 +526,8 @@ class CropImageBatchToMaskBoundsNodeAE:
         # Validate tensor shapes and batch sizes
         if not isinstance(images, torch.Tensor):
             raise ValueError(f"images must be a torch.Tensor, got {type(images).__name__}")
-        
+
+        masks = normalize_mask_batch(masks)
         if not isinstance(masks, torch.Tensor):
             raise ValueError(f"masks must be a torch.Tensor, got {type(masks).__name__}")
         
@@ -526,6 +546,11 @@ class CropImageBatchToMaskBoundsNodeAE:
         if images.shape[3] != 3:
             raise ValueError(
                 f"images must have 3 color channels (B, H, W, 3), got shape {tuple(images.shape)}"
+            )
+
+        if images.shape[1] == 0 or images.shape[2] == 0:
+            raise ValueError(
+                f"images must have a non-zero height and width, got shape {tuple(images.shape)}"
             )
         
         # Validate inputs
