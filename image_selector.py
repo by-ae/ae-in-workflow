@@ -161,7 +161,11 @@ def render_text_with_outline(font, text, text_color, outline_color=(0, 0, 0), ou
     return surface
 
 def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, result_callback):
-    """Load folder contents asynchronously"""
+    """Load folder contents on a background thread.
+
+    The callback runs on that thread. It must not touch the path list or the
+    window; hand the paths to FolderLoadMailbox and apply them on the UI thread.
+    """
     def load_task():
         try:
             # Paths only. The decoded files are closed inside the lister.
@@ -177,6 +181,71 @@ def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, 
     thread = threading.Thread(target=load_task, daemon=True)
     thread.start()
     return thread
+
+
+class FolderLoadMailbox:
+    """One-slot handoff from the folder loader thread to the UI thread.
+
+    `begin` starts a navigation and drops a result that has not been applied,
+    including one from an older navigation that finishes late. `publish` stores
+    the listing. `take` returns it, and an empty path list means the folder
+    finished loading with no images.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._pending = None
+
+    def begin(self):
+        with self._lock:
+            self._generation += 1
+            self._pending = None
+            return self._generation
+
+    def publish(self, generation, paths, sort):
+        """Store this listing when `generation` is still the current navigation.
+
+        `sort` is the (mode, ascending) pair the loader used. Returns False
+        when a newer folder was requested.
+        """
+        with self._lock:
+            if generation != self._generation:
+                return False
+            self._pending = (list(paths), sort)
+            return True
+
+    def take(self):
+        """Return (paths, sort), or None when nothing is waiting."""
+        with self._lock:
+            pending = self._pending
+            self._pending = None
+            return pending
+
+
+def folder_grid_max_scroll(image_count, cols, cell_height, screen_height):
+    """How far the thumbnail grid can scroll, matching the selector's formula."""
+    if cols <= 0:
+        return 0
+    rows = (image_count + cols - 1) // cols
+    return max(0, rows * cell_height - screen_height + 100)
+
+
+def loaded_folder_state(paths, loaded_sort, current_sort, cols, cell_height, screen_height):
+    """Grid state after a folder listing arrives on the UI thread.
+
+    Scroll goes back to the top. A shorter folder would otherwise stay
+    scrolled past its last row and look empty. When the sort changed while
+    the folder was loading, the paths are sorted again so the label and the
+    grid agree. `loaded_sort` and `current_sort` are (mode, ascending).
+    """
+    if loaded_sort == current_sort:
+        ordered = list(paths)
+    else:
+        mode, ascending = current_sort
+        ordered = sort_image_paths(list(paths), mode, ascending)
+    max_scroll = folder_grid_max_scroll(len(ordered), cols, cell_height, screen_height)
+    return ordered, max_scroll, 0
 
 def selection_toggle_label(selected_count, total_count):
     """Label for the image selector's select-all button.
@@ -556,12 +625,31 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
     selected_paths = []  # Will store paths in order they were selected
     selected_path_set = set()   # For quick lookup of selected paths
     scroll_offset = 0
-    max_scroll = max(0, ((len(paths) + cols - 1) // cols) * cell_height - screen_height + 100)
+    max_scroll = folder_grid_max_scroll(len(paths), cols, cell_height, screen_height)
+    folder_loads = FolderLoadMailbox()
 
     running = True
     clock = pygame.time.Clock()
 
     while running:
+        # Apply a listing the worker finished. Doing it here keeps pygame and
+        # the path list on this thread, and drops a folder the user already left.
+        arrived = folder_loads.take()
+        if arrived is not None:
+            arrived_paths, arrived_sort = arrived
+            paths, max_scroll, scroll_offset = loaded_folder_state(
+                arrived_paths,
+                arrived_sort,
+                (sort_modes[sort_mode_index], sort_ascending),
+                cols,
+                cell_height,
+                screen_height,
+            )
+            lazy_loader = LazyImageLoader(paths, thumbnail_size)
+            loading_folder = False
+            selected_paths = []
+            selected_path_set = set()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -570,8 +658,9 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                     running = False
                 elif event.key == pygame.K_RETURN:
                     running = False
-                elif event.key == pygame.K_a and pygame.key.get_mods() & pygame.KMOD_CTRL:
-                    # Ctrl+A to select/deselect all
+                elif event.key == pygame.K_a and pygame.key.get_mods() & pygame.KMOD_CTRL and not loading_folder:
+                    # Ctrl+A to select/deselect all. Ignored while a folder is loading
+                    # so the previous folder's files are not selected under the overlay.
                     if len(selected_paths) != len(paths):
                         # Select all in current sorted order
                         selected_paths = paths.copy()
@@ -613,7 +702,7 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                         mouse_y,
                         [(entry["name"],) + entry["hit"] for entry in controls],
                     )
-                    if hit == "select_all":
+                    if hit == "select_all" and not loading_folder:
                         if selection_toggle_label(len(selected_paths), len(paths)) == "SELECT ALL":
                             selected_paths = paths.copy()
                             selected_path_set = set(paths)
@@ -637,7 +726,9 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                         if 0 <= item_index < len(folder_tree):
                             item_name, item_path, is_folder = folder_tree[item_index]
                             if is_folder:
-                                # Navigate to folder - async loading
+                                # Navigate to folder. The worker only publishes paths;
+                                # the UI thread applies them at the start of the frame.
+                                generation = folder_loads.begin()
                                 current_folder = item_path
                                 loading_folder = True
                                 selected_paths = []
@@ -645,17 +736,13 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                                 folder_tree = build_folder_tree(current_folder, current_folder)
                                 tree_scroll_offset = 0
                                 max_tree_scroll = max(0, len(folder_tree) * 25 - (screen_height - 100))
+                                requested_sort = (sort_modes[sort_mode_index], sort_ascending)
 
-                                # Start async loading
-                                def on_folder_loaded(new_paths):
-                                    nonlocal paths, lazy_loader, max_scroll, loading_folder
-                                    paths = new_paths
-                                    lazy_loader = LazyImageLoader(paths, thumbnail_size)
-                                    max_scroll = max(0, ((len(paths) + cols - 1) // cols) * cell_height - screen_height + 100)
-                                    loading_folder = False
+                                def on_folder_loaded(new_paths, gen=generation, sort=requested_sort):
+                                    folder_loads.publish(gen, new_paths, sort)
 
                                 loading_thread = load_folder_async(current_folder, sort_mode_index, sort_ascending, sort_modes, on_folder_loaded)
-                    elif mouse_x >= tree_width:
+                    elif mouse_x >= tree_width and not loading_folder:
                         # Thumbnail panel click
                         mouse_x -= tree_width
                         mouse_y += scroll_offset

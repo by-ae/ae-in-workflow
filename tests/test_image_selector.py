@@ -346,6 +346,79 @@ def test_sort_direction_stays_clickable_past_the_folder_panel():
     assert control_button_at(hit_x + hit_w + 1, hit_y, buttons) is None
 
 
+def test_folder_load_mailbox_drops_a_stale_listing():
+    """A slow folder that finishes after a newer click must not replace it."""
+    from image_selector import FolderLoadMailbox
+
+    box = FolderLoadMailbox()
+    first = box.begin()
+    assert box.publish(first, ["a.png"], ("name", True)) is True
+    # Navigating again drops the result that has not been applied yet.
+    second = box.begin()
+    assert box.take() is None
+    assert box.publish(first, ["old.png"], ("name", True)) is False
+    assert box.publish(second, [], ("modified", False)) is True
+    assert box.take() == ([], ("modified", False))
+    assert box.take() is None
+
+
+def test_loaded_folder_state_resets_scroll_and_resorts():
+    """A newly loaded folder starts at the top, in the sort the UI is showing."""
+    from image_selector import loaded_folder_state
+
+    ordered, max_scroll, scroll = loaded_folder_state(
+        ["/a.png", "/m.png", "/z.png"],
+        ("name", True),
+        ("name", False),
+        4,
+        200,
+        800,
+    )
+    assert ordered == ["/z.png", "/m.png", "/a.png"]
+    assert scroll == 0
+    assert max_scroll == 0
+
+    many = ["/{0}.png".format(i) for i in range(40)]
+    kept, max_scroll, scroll = loaded_folder_state(
+        many, ("name", True), ("name", True), 4, 200, 800
+    )
+    assert kept == many
+    assert scroll == 0
+    assert max_scroll > 0
+
+
+def test_load_folder_async_publishes_for_the_ui_thread(tmp_path):
+    """The worker delivers paths through the mailbox instead of the window."""
+    from image_selector import FolderLoadMailbox, load_folder_async
+
+    Image.new("RGB", (2, 2), "red").save(tmp_path / "b.png")
+    Image.new("RGB", (2, 2), "blue").save(tmp_path / "a.png")
+    box = FolderLoadMailbox()
+    generation = box.begin()
+    thread = load_folder_async(
+        str(tmp_path),
+        0,
+        True,
+        ["name"],
+        lambda paths: box.publish(generation, paths, ("name", True)),
+    )
+    assert thread.join(timeout=5) is None
+    assert thread.is_alive() is False
+    loaded, sort = box.take()
+    assert sort == ("name", True)
+    assert [os.path.basename(path) for path in loaded] == ["a.png", "b.png"]
+
+
+def test_load_folder_async_reports_failure_as_an_empty_listing(tmp_path):
+    """A failed listing is an empty result the UI can apply, not a lost callback."""
+    from image_selector import load_folder_async
+
+    seen = []
+    thread = load_folder_async(str(tmp_path), 9, True, ["name"], seen.append)
+    thread.join(timeout=5)
+    assert seen == [[]]
+
+
 def test_build_folder_tree():
     """Test folder tree building"""
     from image_selector import build_folder_tree
