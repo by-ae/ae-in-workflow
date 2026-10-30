@@ -39,6 +39,44 @@ def get_cache_dir():
 # Undo/Redo constants
 MAX_UNDO_STEPS = 5000  # Maximum undo steps to keep
 
+
+class UndoStack:
+    """Snapshots for Ctrl+Z and Ctrl+Y.
+
+    `checkpoint` stores the pose the user can return to: the one first shown,
+    or the one just restored with Ctrl+O. `save` records an edit after that.
+    Undo stops at the checkpoint, so the first edit has somewhere to go.
+    """
+
+    def __init__(self, max_steps=MAX_UNDO_STEPS):
+        self.buffer = []
+        self.index = -1
+        self.max_steps = max_steps
+
+    def checkpoint(self, state):
+        self.buffer = [state]
+        self.index = 0
+
+    def save(self, state):
+        self.buffer = self.buffer[:self.index + 1]
+        self.buffer.append(state)
+        self.index += 1
+        if len(self.buffer) > self.max_steps:
+            self.buffer.pop(0)
+            self.index -= 1
+
+    def undo(self):
+        if self.index > 0:
+            self.index -= 1
+            return self.buffer[self.index]
+        return None
+
+    def redo(self):
+        if self.index < len(self.buffer) - 1:
+            self.index += 1
+            return self.buffer[self.index]
+        return None
+
 # Common pose structure (same for all people)
 # NOTE: Unsure if this is the correct "official order" as there was a lot of contradicting info on pose layouts
 # From what I gather the colors, order, etc. are essentially varioua, but this one mostly aligns with cnet preprocessor colors
@@ -836,34 +874,26 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
     mouse_down_pos = None
     drag_state = None  # Will store {'original_positions': {...}, 'start_pos': (x,y)}
 
-    # Undo/Redo system
-    undo_buffer = []  # List of state snapshots
-    undo_index = -1   # Current position in undo buffer (-1 means no undo history)
+    # Undo/Redo system. The checkpoint below is the pose as first shown.
+    undo_stack = UndoStack()
     continuous_operation_active = False  # Track if continuous operations are happening
 
-    def save_undo_state():
-        """Save current editor state to undo buffer"""
-        nonlocal undo_index
-
-        # Create a deep copy of the current state
-        state = {
+    def current_undo_state():
+        """Deep copy of the pose the undo commands store and restore."""
+        return {
             'people_keypoints': [[point.copy() for point in person] for person in people_keypoints],
-            'people_valid_keypoints': [set(valid) for valid in people_valid_keypoints],  # Use sets for easier copying
+            'people_valid_keypoints': [set(valid) for valid in people_valid_keypoints],
             'people_original_confidences': [[conf for conf in person_confs] for person_confs in people_original_confidences],
             'selected_person': selected_person
         }
 
-        # Remove any redo states (states after current undo_index)
-        undo_buffer[:] = undo_buffer[:undo_index + 1]
+    def save_undo_state():
+        """Save current editor state to undo buffer"""
+        undo_stack.save(current_undo_state())
 
-        # Add new state
-        undo_buffer.append(state)
-        undo_index += 1
-
-        # Limit buffer size
-        if len(undo_buffer) > MAX_UNDO_STEPS:
-            undo_buffer.pop(0)
-            undo_index -= 1
+    def checkpoint_undo():
+        """Remember this pose as the oldest state Ctrl+Z can reach."""
+        undo_stack.checkpoint(current_undo_state())
 
     def restore_undo_state(state):
         """Restore editor state from undo buffer"""
@@ -889,6 +919,10 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
     all_points = []
     for person_keypoints in people_keypoints:
         all_points.extend(person_keypoints)
+
+    # Without this, the first edit is the oldest snapshot and Ctrl+Z cannot
+    # return to the pose that was on screen when the window opened.
+    checkpoint_undo()
 
     while running:
         mouse = pygame.mouse.get_pos()
@@ -928,28 +962,28 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                 if keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]:
                     if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
                         # Ctrl+Shift+Z: Redo
-                        if undo_index < len(undo_buffer) - 1:
-                            undo_index += 1
-                            restore_undo_state(undo_buffer[undo_index])
-                            print(f"Redo: Restored state {undo_index + 1}/{len(undo_buffer)}")
+                        restored = undo_stack.redo()
+                        if restored is not None:
+                            restore_undo_state(restored)
+                            print(f"Redo: Restored state {undo_stack.index + 1}/{len(undo_stack.buffer)}")
                         else:
                             print("Redo: No more states to redo")
                     else:
                         # Ctrl+Z: Undo
-                        if undo_index > 0:
-                            undo_index -= 1
-                            restore_undo_state(undo_buffer[undo_index])
-                            print(f"Undo: Restored state {undo_index + 1}/{len(undo_buffer)}")
+                        restored = undo_stack.undo()
+                        if restored is not None:
+                            restore_undo_state(restored)
+                            print(f"Undo: Restored state {undo_stack.index + 1}/{len(undo_stack.buffer)}")
                         else:
                             print("Undo: No more states to undo")
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_y:
                 keys = pygame.key.get_pressed()
                 if keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]:
                     # Ctrl+Y: Redo
-                    if undo_index < len(undo_buffer) - 1:
-                        undo_index += 1
-                        restore_undo_state(undo_buffer[undo_index])
-                        print(f"Redo: Restored state {undo_index + 1}/{len(undo_buffer)}")
+                    restored = undo_stack.redo()
+                    if restored is not None:
+                        restore_undo_state(restored)
+                        print(f"Redo: Restored state {undo_stack.index + 1}/{len(undo_stack.buffer)}")
                     else:
                         print("Redo: No more states to redo")
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_o:
@@ -1009,9 +1043,9 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                         selected_person = 0
                         selected_keypoint = None
 
-                        # Clear undo buffer after full reset
-                        undo_buffer.clear()
-                        undo_index = -1
+                        # The reset pose is the new oldest snapshot, so the next
+                        # edit can be undone back to it.
+                        checkpoint_undo()
 
                         print("Reset complete - back to original input pose")
                     except Exception as e:
