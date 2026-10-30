@@ -315,6 +315,37 @@ def test_selection_toggle_label():
     assert selection_toggle_label(0, 0) == "SELECT ALL"
 
 
+class _WideFont:
+    """9 pixels per character, close to Arial at 16px, where the controls overflow."""
+
+    def size(self, text):
+        return (len(text) * 9, 19)
+
+
+def test_sort_direction_stays_clickable_past_the_folder_panel():
+    """The direction control is drawn past the 250px panel and must still be a hit.
+
+    Clicks used to be ignored once x reached the panel edge, so the default
+    "Sort: Modified" direction button did nothing.
+    """
+    from image_selector import control_button_at, selector_control_layout
+
+    panel_width = 250
+    layout = selector_control_layout(_WideFont(), "Modified", False, 0, 4, 730)
+    direction = next(entry for entry in layout if entry["name"] == "sort_dir")
+    assert direction["text_x"] > panel_width
+
+    buttons = [(entry["name"],) + entry["hit"] for entry in layout]
+    assert control_button_at(direction["text_x"], direction["text_y"], buttons) == "sort_dir"
+    # A point on the folder list, away from the controls, is not a button.
+    assert control_button_at(20, 100, buttons) is None
+    # The padding around the label is part of the drawn button.
+    hit_x, hit_y, hit_w, hit_h = direction["hit"]
+    assert control_button_at(hit_x, hit_y, buttons) == "sort_dir"
+    assert control_button_at(hit_x + hit_w, hit_y + hit_h, buttons) == "sort_dir"
+    assert control_button_at(hit_x + hit_w + 1, hit_y, buttons) is None
+
+
 def test_build_folder_tree():
     """Test folder tree building"""
     from image_selector import build_folder_tree
