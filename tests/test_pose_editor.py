@@ -578,6 +578,68 @@ def test_editor_checkpoints_before_the_first_edit(monkeypatch, tmp_path):
     assert edited[0]["people"]
 
 
+def test_editor_draws_a_joint_with_no_neighbor(monkeypatch, tmp_path):
+    """A visible joint with no bone must be drawn, not only its selection ring."""
+    import pygame
+    import pose_editor
+
+    pose_editor.CACHE_DIR = None
+    pose_editor.CACHE_FILE = None
+    pose_editor.WINDOW_CACHE_FILE = None
+    monkeypatch.setattr(pose_editor.os.path, "expanduser", lambda _path: str(tmp_path))
+    monkeypatch.setattr(pose_editor, "get_window_position_fallback", lambda _title: None)
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+
+    screen = {}
+    real_set_mode = pygame.display.set_mode
+
+    def tracking_set_mode(*args, **kwargs):
+        surface = real_set_mode(*args, **kwargs)
+        screen["surface"] = surface
+        return surface
+
+    monkeypatch.setattr(pygame.display, "set_mode", tracking_set_mode)
+
+    filled = []
+    real_circle = pygame.draw.circle
+
+    def tracking_circle(surface, color, center, radius, width=0):
+        if surface is screen.get("surface") and color == (255, 255, 255) and width == 0:
+            filled.append(radius)
+        return real_circle(surface, color, center, radius, width)
+
+    monkeypatch.setattr(pygame.draw, "circle", tracking_circle)
+
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        image, _edited = pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        pose_editor.CACHE_DIR = None
+        pose_editor.CACHE_FILE = None
+        pose_editor.WINDOW_CACHE_FILE = None
+
+    assert image is not None and float(image.max()) > 0
+    assert filled
+
+
+def test_keypoint_draw_colors_keeps_bone_colors_and_isolated_joints():
+    """Bone colors stay attached to their joints, and a lone joint is white."""
+    from pose_editor import keypoint_draw_colors
+
+    assert keypoint_draw_colors([10], [], []) == [(10, [(255, 255, 255)])]
+    assert keypoint_draw_colors([1, 2], [(1, 2)], [(152, 0, 0)]) == [
+        (1, [(152, 0, 0)]),
+        (2, [(152, 0, 0)]),
+    ]
+    # A joint on two bones is drawn once per bone, in pair order.
+    drawn = keypoint_draw_colors(
+        [0, 1, 2],
+        [(1, 0), (1, 2)],
+        [(1, 2, 3), (4, 5, 6)],
+    )
+    assert drawn[1] == (1, [(1, 2, 3), (4, 5, 6)])
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS
