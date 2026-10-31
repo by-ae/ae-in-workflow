@@ -161,7 +161,11 @@ def render_text_with_outline(font, text, text_color, outline_color=(0, 0, 0), ou
     return surface
 
 def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, result_callback):
-    """Load folder contents asynchronously"""
+    """Load folder contents on a background thread.
+
+    The callback runs on that thread. It must not touch the path list or the
+    window; hand the paths to FolderLoadMailbox and apply them on the UI thread.
+    """
     def load_task():
         try:
             # Paths only. The decoded files are closed inside the lister.
@@ -178,6 +182,71 @@ def load_folder_async(folder_path, sort_mode_index, sort_ascending, sort_modes, 
     thread.start()
     return thread
 
+
+class FolderLoadMailbox:
+    """One-slot handoff from the folder loader thread to the UI thread.
+
+    `begin` starts a navigation and drops a result that has not been applied,
+    including one from an older navigation that finishes late. `publish` stores
+    the listing. `take` returns it, and an empty path list means the folder
+    finished loading with no images.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._pending = None
+
+    def begin(self):
+        with self._lock:
+            self._generation += 1
+            self._pending = None
+            return self._generation
+
+    def publish(self, generation, paths, sort):
+        """Store this listing when `generation` is still the current navigation.
+
+        `sort` is the (mode, ascending) pair the loader used. Returns False
+        when a newer folder was requested.
+        """
+        with self._lock:
+            if generation != self._generation:
+                return False
+            self._pending = (list(paths), sort)
+            return True
+
+    def take(self):
+        """Return (paths, sort), or None when nothing is waiting."""
+        with self._lock:
+            pending = self._pending
+            self._pending = None
+            return pending
+
+
+def folder_grid_max_scroll(image_count, cols, cell_height, screen_height):
+    """How far the thumbnail grid can scroll, matching the selector's formula."""
+    if cols <= 0:
+        return 0
+    rows = (image_count + cols - 1) // cols
+    return max(0, rows * cell_height - screen_height + 100)
+
+
+def loaded_folder_state(paths, loaded_sort, current_sort, cols, cell_height, screen_height):
+    """Grid state after a folder listing arrives on the UI thread.
+
+    Scroll goes back to the top. A shorter folder would otherwise stay
+    scrolled past its last row and look empty. When the sort changed while
+    the folder was loading, the paths are sorted again so the label and the
+    grid agree. `loaded_sort` and `current_sort` are (mode, ascending).
+    """
+    if loaded_sort == current_sort:
+        ordered = list(paths)
+    else:
+        mode, ascending = current_sort
+        ordered = sort_image_paths(list(paths), mode, ascending)
+    max_scroll = folder_grid_max_scroll(len(ordered), cols, cell_height, screen_height)
+    return ordered, max_scroll, 0
+
 def selection_toggle_label(selected_count, total_count):
     """Label for the image selector's select-all button.
 
@@ -187,6 +256,55 @@ def selection_toggle_label(selected_count, total_count):
     if total_count > 0 and selected_count == total_count:
         return "DESELECT ALL"
     return "SELECT ALL"
+
+
+def selector_control_layout(font, sort_label, ascending, selected_count, total_count, button_y):
+    """Place the three controls drawn along the bottom of the folder panel.
+
+    Each entry has the label, the text position, and the background rectangle
+    actually drawn (5 pixels of padding around the text). Controls start at
+    x=10 and follow the previous label. The folder panel is 250 pixels wide;
+    a long sort name, or DESELECT ALL, extends past that edge.
+    """
+    labels = (
+        ("select_all", selection_toggle_label(selected_count, total_count)),
+        ("sort_mode", "Sort: " + sort_label),
+        ("sort_dir", "↑" if ascending else "↓"),
+    )
+    entries = []
+    text_x = 10
+    for name, text in labels:
+        width, height = font.size(text)
+        entries.append({
+            "name": name,
+            "text": text,
+            "text_x": text_x,
+            "text_y": button_y,
+            "hit": (text_x - 5, button_y - 5, width + 10, height + 10),
+        })
+        text_x += width + 20
+    return entries
+
+
+def control_button_at(mouse_x, mouse_y, buttons):
+    """Name of the control under the pointer, or None.
+
+    `buttons` is a sequence of (name, x, y, width, height). The first match
+    wins. A control drawn past the folder panel is still a hit.
+    """
+    for name, x, y, width, height in buttons:
+        if x <= mouse_x <= x + width and y <= mouse_y <= y + height:
+            return name
+    return None
+
+
+def pointer_in_control_strip(mouse_y, controls):
+    """True when the pointer is in the vertical band the controls occupy."""
+    for entry in controls:
+        _, y, _, height = entry["hit"]
+        if y <= mouse_y <= y + height:
+            return True
+    return False
 
 
 def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
@@ -507,17 +625,31 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
     selected_paths = []  # Will store paths in order they were selected
     selected_path_set = set()   # For quick lookup of selected paths
     scroll_offset = 0
-    max_scroll = max(0, ((len(paths) + cols - 1) // cols) * cell_height - screen_height + 100)
+    max_scroll = folder_grid_max_scroll(len(paths), cols, cell_height, screen_height)
+    folder_loads = FolderLoadMailbox()
 
     running = True
     clock = pygame.time.Clock()
 
-    # Button position variables (calculated each frame but initialized here to avoid undefined name errors)
-    select_all_x = 10
-    sort_mode_x = 150
-    sort_dir_x = 300
-
     while running:
+        # Apply a listing the worker finished. Doing it here keeps pygame and
+        # the path list on this thread, and drops a folder the user already left.
+        arrived = folder_loads.take()
+        if arrived is not None:
+            arrived_paths, arrived_sort = arrived
+            paths, max_scroll, scroll_offset = loaded_folder_state(
+                arrived_paths,
+                arrived_sort,
+                (sort_modes[sort_mode_index], sort_ascending),
+                cols,
+                cell_height,
+                screen_height,
+            )
+            lazy_loader = LazyImageLoader(paths, thumbnail_size)
+            loading_folder = False
+            selected_paths = []
+            selected_path_set = set()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -526,8 +658,9 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                     running = False
                 elif event.key == pygame.K_RETURN:
                     running = False
-                elif event.key == pygame.K_a and pygame.key.get_mods() & pygame.KMOD_CTRL:
-                    # Ctrl+A to select/deselect all
+                elif event.key == pygame.K_a and pygame.key.get_mods() & pygame.KMOD_CTRL and not loading_folder:
+                    # Ctrl+A to select/deselect all. Ignored while a folder is loading
+                    # so the previous folder's files are not selected under the overlay.
                     if len(selected_paths) != len(paths):
                         # Select all in current sorted order
                         selected_paths = paths.copy()
@@ -553,67 +686,63 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left click
                     mouse_x, mouse_y = pygame.mouse.get_pos()
-
-                    # Check if click is in tree panel
-                    if mouse_x < tree_width:
-                        # Check if click is on control buttons
-                        button_y = screen_height - 70
-                        if button_y <= mouse_y <= button_y + 20:
-                            # Select All button. Width matches the drawn label.
-                            select_all_text = selection_toggle_label(len(selected_paths), len(paths))
-                            select_all_surface = font.render(select_all_text, True, TEXT_COLOR)
-                            if select_all_x <= mouse_x <= select_all_x + select_all_surface.get_width():
-                                if select_all_text == "SELECT ALL":
-                                    # Select all in current sorted order
-                                    selected_paths = paths.copy()
-                                    selected_path_set = set(paths)
-                                else:
-                                    # Deselect all
-                                    selected_paths = []
-                                    selected_path_set = set()
-                                break
-                            # Sort Mode button
-                            elif sort_mode_x <= mouse_x <= sort_mode_x + font.render(f"Sort: {sort_modes[sort_mode_index].title()}", True, TEXT_COLOR).get_width():
-                                sort_mode_index = (sort_mode_index + 1) % len(sort_modes)
-                                save_sort_settings(sort_mode_index, sort_ascending)
-                                paths = sort_image_paths(paths, sort_modes[sort_mode_index], sort_ascending)
-                                # Clear cache and create new lazy loader with sorted paths
-                                lazy_loader = LazyImageLoader(paths, thumbnail_size)
-                                break
-                            # Sort Direction button
-                            elif sort_dir_x <= mouse_x <= sort_dir_x + font.render("↑" if sort_ascending else "↓", True, TEXT_COLOR).get_width():
-                                sort_ascending = not sort_ascending
-                                save_sort_settings(sort_mode_index, sort_ascending)
-                                paths = sort_image_paths(paths, sort_modes[sort_mode_index], sort_ascending)
-                                # Clear cache and create new lazy loader with sorted paths
-                                lazy_loader = LazyImageLoader(paths, thumbnail_size)
-                                break
+                    button_y = screen_height - 70
+                    # Hit the rectangles that are drawn, including the part of a
+                    # sort control that extends past the 250px folder panel.
+                    controls = selector_control_layout(
+                        font,
+                        sort_modes[sort_mode_index].title(),
+                        sort_ascending,
+                        len(selected_paths),
+                        len(paths),
+                        button_y,
+                    )
+                    hit = control_button_at(
+                        mouse_x,
+                        mouse_y,
+                        [(entry["name"],) + entry["hit"] for entry in controls],
+                    )
+                    if hit == "select_all" and not loading_folder:
+                        if selection_toggle_label(len(selected_paths), len(paths)) == "SELECT ALL":
+                            selected_paths = paths.copy()
+                            selected_path_set = set(paths)
                         else:
-                            # Tree navigation click
-                            tree_y = mouse_y + tree_scroll_offset
-                            item_index = tree_y // 25
-                            if 0 <= item_index < len(folder_tree):
-                                item_name, item_path, is_folder = folder_tree[item_index]
-                                if is_folder:
-                                    # Navigate to folder - async loading
-                                    current_folder = item_path
-                                    loading_folder = True
-                                    selected_paths = []
-                                    selected_path_set = set()
-                                    folder_tree = build_folder_tree(current_folder, current_folder)
-                                    tree_scroll_offset = 0
-                                    max_tree_scroll = max(0, len(folder_tree) * 25 - (screen_height - 100))
+                            selected_paths = []
+                            selected_path_set = set()
+                    elif hit == "sort_mode":
+                        sort_mode_index = (sort_mode_index + 1) % len(sort_modes)
+                        save_sort_settings(sort_mode_index, sort_ascending)
+                        paths = sort_image_paths(paths, sort_modes[sort_mode_index], sort_ascending)
+                        lazy_loader = LazyImageLoader(paths, thumbnail_size)
+                    elif hit == "sort_dir":
+                        sort_ascending = not sort_ascending
+                        save_sort_settings(sort_mode_index, sort_ascending)
+                        paths = sort_image_paths(paths, sort_modes[sort_mode_index], sort_ascending)
+                        lazy_loader = LazyImageLoader(paths, thumbnail_size)
+                    elif mouse_x < tree_width and not pointer_in_control_strip(mouse_y, controls):
+                        # Tree navigation click
+                        tree_y = mouse_y + tree_scroll_offset
+                        item_index = tree_y // 25
+                        if 0 <= item_index < len(folder_tree):
+                            item_name, item_path, is_folder = folder_tree[item_index]
+                            if is_folder:
+                                # Navigate to folder. The worker only publishes paths;
+                                # the UI thread applies them at the start of the frame.
+                                generation = folder_loads.begin()
+                                current_folder = item_path
+                                loading_folder = True
+                                selected_paths = []
+                                selected_path_set = set()
+                                folder_tree = build_folder_tree(current_folder, current_folder)
+                                tree_scroll_offset = 0
+                                max_tree_scroll = max(0, len(folder_tree) * 25 - (screen_height - 100))
+                                requested_sort = (sort_modes[sort_mode_index], sort_ascending)
 
-                                    # Start async loading
-                                    def on_folder_loaded(new_paths):
-                                        nonlocal paths, lazy_loader, max_scroll, loading_folder
-                                        paths = new_paths
-                                        lazy_loader = LazyImageLoader(paths, thumbnail_size)
-                                        max_scroll = max(0, ((len(paths) + cols - 1) // cols) * cell_height - screen_height + 100)
-                                        loading_folder = False
+                                def on_folder_loaded(new_paths, gen=generation, sort=requested_sort):
+                                    folder_loads.publish(gen, new_paths, sort)
 
-                                    loading_thread = load_folder_async(current_folder, sort_mode_index, sort_ascending, sort_modes, on_folder_loaded)
-                    else:
+                                loading_thread = load_folder_async(current_folder, sort_mode_index, sort_ascending, sort_modes, on_folder_loaded)
+                    elif mouse_x >= tree_width and not loading_folder:
                         # Thumbnail panel click
                         mouse_x -= tree_width
                         mouse_y += scroll_offset
@@ -665,29 +794,19 @@ def create_image_selector_ui(paths, folder_path, padding_color="#000000", target
                 text_surface = render_text_with_outline(font, item_name, TEXT_COLOR)
                 screen.blit(text_surface, (10, y + 5))
 
-        # Draw control buttons
+        # Draw control buttons. The same layout is used for hit testing.
         button_y = screen_height - 70
-
-        # Select All button
-        select_all_text = selection_toggle_label(len(selected_paths), len(paths))
-        select_all_surface = font.render(select_all_text, True, TEXT_COLOR)
-        select_all_x = 10
-        pygame.draw.rect(screen, THUMB_BG, (select_all_x - 5, button_y - 5, select_all_surface.get_width() + 10, select_all_surface.get_height() + 10))
-        screen.blit(select_all_surface, (select_all_x, button_y))
-
-        # Sort Mode button
-        sort_mode_text = f"Sort: {sort_modes[sort_mode_index].title()}"
-        sort_mode_surface = font.render(sort_mode_text, True, TEXT_COLOR)
-        sort_mode_x = select_all_x + select_all_surface.get_width() + 20
-        pygame.draw.rect(screen, THUMB_BG, (sort_mode_x - 5, button_y - 5, sort_mode_surface.get_width() + 10, sort_mode_surface.get_height() + 10))
-        screen.blit(sort_mode_surface, (sort_mode_x, button_y))
-
-        # Sort Direction button
-        sort_dir_text = "↑" if sort_ascending else "↓"
-        sort_dir_surface = font.render(sort_dir_text, True, TEXT_COLOR)
-        sort_dir_x = sort_mode_x + sort_mode_surface.get_width() + 20
-        pygame.draw.rect(screen, THUMB_BG, (sort_dir_x - 5, button_y - 5, sort_dir_surface.get_width() + 10, sort_dir_surface.get_height() + 10))
-        screen.blit(sort_dir_surface, (sort_dir_x, button_y))
+        for entry in selector_control_layout(
+            font,
+            sort_modes[sort_mode_index].title(),
+            sort_ascending,
+            len(selected_paths),
+            len(paths),
+            button_y,
+        ):
+            hit_x, hit_y, hit_w, hit_h = entry["hit"]
+            pygame.draw.rect(screen, THUMB_BG, (hit_x, hit_y, hit_w, hit_h))
+            screen.blit(font.render(entry["text"], True, TEXT_COLOR), (entry["text_x"], entry["text_y"]))
 
         # Draw loading overlay if folder is loading
         if loading_folder:

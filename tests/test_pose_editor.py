@@ -503,6 +503,81 @@ def test_canvas_placement_clamps_to_minimum_and_maximum():
     assert height == 64
 
 
+def test_undo_stack_reaches_the_checkpoint():
+    """The first edit must undo back to the pose that was checkpointed."""
+    from pose_editor import UndoStack
+
+    stack = UndoStack()
+    stack.checkpoint({"n": 0})
+    assert stack.undo() is None
+
+    stack.save({"n": 1})
+    assert stack.undo() == {"n": 0}
+    assert stack.redo() == {"n": 1}
+
+    # A new edit drops the redo branch, and undo still reaches the checkpoint.
+    stack.save({"n": 2})
+    stack.undo()
+    stack.save({"n": 9})
+    assert stack.redo() is None
+    assert stack.undo() == {"n": 1}
+    assert stack.undo() == {"n": 0}
+    assert stack.undo() is None
+
+
+def test_undo_stack_drops_the_oldest_past_the_cap():
+    """History keeps at most max_steps snapshots, including the checkpoint."""
+    from pose_editor import UndoStack
+
+    stack = UndoStack(max_steps=3)
+    stack.checkpoint({"n": 0})
+    stack.save({"n": 1})
+    stack.save({"n": 2})
+    stack.save({"n": 3})
+    assert [item["n"] for item in stack.buffer] == [1, 2, 3]
+    assert stack.undo() == {"n": 2}
+    assert stack.undo() == {"n": 1}
+    assert stack.undo() is None
+
+
+def test_editor_checkpoints_before_the_first_edit(monkeypatch, tmp_path):
+    """Opening the window stores the shown pose, so the first Ctrl+Z has a target."""
+    import pygame
+    import pose_editor
+
+    pose_editor.CACHE_DIR = None
+    pose_editor.CACHE_FILE = None
+    pose_editor.WINDOW_CACHE_FILE = None
+    monkeypatch.setattr(pose_editor.os.path, "expanduser", lambda _path: str(tmp_path))
+    monkeypatch.setattr(pose_editor, "get_window_position_fallback", lambda _title: None)
+
+    checkpoints = []
+    real_checkpoint = pose_editor.UndoStack.checkpoint
+
+    def spy(self, state):
+        checkpoints.append(state["selected_person"])
+        return real_checkpoint(self, state)
+
+    monkeypatch.setattr(pose_editor.UndoStack, "checkpoint", spy)
+    monkeypatch.setattr(
+        pygame.event,
+        "get",
+        lambda: [pygame.event.Event(pygame.QUIT)],
+    )
+
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0, 30.0, 40.0, 1.0]}]}]
+    try:
+        image, edited = pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        pose_editor.CACHE_DIR = None
+        pose_editor.CACHE_FILE = None
+        pose_editor.WINDOW_CACHE_FILE = None
+
+    assert checkpoints == [0]
+    assert image is not None and image.shape[0] == 1
+    assert edited[0]["people"]
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS

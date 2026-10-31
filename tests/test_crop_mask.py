@@ -556,7 +556,52 @@ def test_crop_node_invalid_tensor_shapes():
     # Wrong image dimensions (3D instead of 4D)
     with pytest.raises(ValueError, match="images must be 4D"):
         node.crop_to_mask_bounds(torch.zeros(2, 64, 64), torch.zeros(2, 64, 64))
-    
-    # Wrong mask dimensions (2D instead of 3D)
-    with pytest.raises(ValueError, match="masks must be 3D"):
+
+    # A single (H, W) mask is not broadcast across a larger image batch.
+    with pytest.raises(ValueError, match="same batch size"):
         node.crop_to_mask_bounds(torch.zeros(2, 64, 64, 3), torch.zeros(64, 64))
+
+    # A 4D mask that is not a size-1 channel is still rejected, and the message names the shape.
+    with pytest.raises(ValueError, match=r"masks must be 3D.*1, 8, 8, 3"):
+        node.crop_to_mask_bounds(torch.zeros(1, 8, 8, 3), torch.zeros(1, 8, 8, 3))
+
+
+def test_crop_accepts_single_mask_and_size_one_channel():
+    """A lone mask and a mask with a size-1 channel crop the same region."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    images = torch.zeros(1, 8, 8, 3)
+    images[0, 2:5, 1:4, 0] = 1.0
+    flat = torch.zeros(8, 8)
+    flat[2:5, 1:4] = 1.0
+    node = CropImageBatchToMaskBoundsNodeAE()
+
+    from_2d, mask_2d = node.crop_to_mask_bounds(
+        images, flat, mode="sum_of_masks", color_fill_mask=False
+    )
+    from_bhw, _ = node.crop_to_mask_bounds(
+        images, flat.unsqueeze(0), mode="sum_of_masks", color_fill_mask=False
+    )
+    from_trailing, _ = node.crop_to_mask_bounds(
+        images, flat.unsqueeze(0).unsqueeze(-1), mode="sum_of_masks", color_fill_mask=False
+    )
+    from_leading, _ = node.crop_to_mask_bounds(
+        images, flat.unsqueeze(0).unsqueeze(1), mode="sum_of_masks", color_fill_mask=False
+    )
+
+    assert from_2d.shape == (1, 3, 3, 3)
+    assert int((mask_2d > 0.5).sum()) == 9
+    assert torch.equal(from_2d, from_bhw)
+    assert torch.equal(from_2d, from_trailing)
+    assert torch.equal(from_2d, from_leading)
+
+
+def test_crop_rejects_zero_height_or_width():
+    """A 0-pixel side reports the shape instead of dividing by zero later."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    with pytest.raises(ValueError, match=r"non-zero height and width.*1, 0, 8, 3"):
+        node.crop_to_mask_bounds(torch.zeros(1, 0, 8, 3), torch.zeros(1, 0, 8))
+    with pytest.raises(ValueError, match=r"non-zero height and width.*1, 8, 0, 3"):
+        node.crop_to_mask_bounds(torch.zeros(1, 8, 0, 3), torch.zeros(1, 8, 0))
