@@ -76,6 +76,21 @@ def load_images_from_folder(folder_path):
 
     return images, paths
 
+def compose_thumbnail(img, size):
+    """Square RGB preview. Transparent pixels are composited onto black.
+
+    The grid background is black. Pasting an RGBA image without its alpha
+    draws the color stored in transparent pixels, so a cleared PNG looks solid.
+    """
+    rgba = img.convert('RGBA')
+    rgba.thumbnail(size, Image.Resampling.LANCZOS)
+    canvas = Image.new('RGB', size, (0, 0, 0))
+    x = (size[0] - rgba.width) // 2
+    y = (size[1] - rgba.height) // 2
+    canvas.paste(rgba, (x, y), rgba)
+    return canvas
+
+
 def create_thumbnail(img, size):
     """Create thumbnail maintaining aspect ratio"""
     img_ratio = img.width / img.height
@@ -488,15 +503,7 @@ class LazyImageLoader:
             try:
                 img = open_image(path)
                 try:
-                    # Resize more efficiently
-                    img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
-                    # Create square thumbnail by padding
-                    thumb = Image.new('RGB', self.thumbnail_size, (0, 0, 0))
-                    x = (self.thumbnail_size[0] - img.width) // 2
-                    y = (self.thumbnail_size[1] - img.height) // 2
-                    thumb.paste(img, (x, y))
-
-                    # Convert PIL to pygame surface
+                    thumb = compose_thumbnail(img, self.thumbnail_size)
                     thumb_surface = pygame.image.fromstring(thumb.tobytes(), thumb.size, 'RGB')
                 finally:
                     img.close()

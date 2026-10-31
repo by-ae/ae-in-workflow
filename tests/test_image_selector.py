@@ -362,6 +362,26 @@ def test_thumbnail_loader_closes_the_image(tmp_path, monkeypatch):
     assert closed == [True]
 
 
+def test_thumbnail_keeps_transparent_pixels_empty(tmp_path):
+    """A cleared pixel must not show the color stored behind its alpha."""
+    from image_selector import LazyImageLoader
+
+    img = Image.new('RGBA', (8, 8), (255, 0, 0, 0))
+    img.putpixel((3, 4), (0, 255, 0, 255))
+    # Half-transparent blue, composited on the black grid, stays blue-black.
+    img.putpixel((1, 1), (0, 0, 255, 128))
+    path = tmp_path / 'clear.png'
+    img.save(path)
+
+    thumb = LazyImageLoader([str(path)], thumbnail_size=(8, 8)).get_thumbnail(str(path))
+    assert thumb is not None
+    assert thumb.get_at((0, 0))[:3] == (0, 0, 0)
+    assert thumb.get_at((3, 4))[:3] == (0, 255, 0)
+    blue = thumb.get_at((1, 1))
+    assert blue[0] == 0 and blue[1] == 0
+    assert 0 < blue[2] < 255
+
+
 def test_selection_toggle_label():
     """The button must say DESELECT ALL only when the click would clear everything."""
     from image_selector import selection_toggle_label
