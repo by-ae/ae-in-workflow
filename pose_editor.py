@@ -77,6 +77,22 @@ class UndoStack:
             return self.buffer[self.index]
         return None
 
+
+def pose_snapshot_changed(previous, current):
+    """True when keypoints, visibility, or confidences differ.
+
+    Selection is ignored. Releasing the mouse after a click that did not
+    move a joint used to store the same pose again, so the next Ctrl+Z
+    looked like it did nothing.
+    """
+    if previous is None:
+        return True
+    return (
+        previous.get("people_keypoints") != current.get("people_keypoints")
+        or previous.get("people_valid_keypoints") != current.get("people_valid_keypoints")
+        or previous.get("people_original_confidences") != current.get("people_original_confidences")
+    )
+
 # Common pose structure (same for all people)
 # NOTE: Unsure if this is the correct "official order" as there was a lot of contradicting info on pose layouts
 # From what I gather the colors, order, etc. are essentially varioua, but this one mostly aligns with cnet preprocessor colors
@@ -911,7 +927,10 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
 
     def save_undo_state():
         """Save current editor state to undo buffer"""
-        undo_stack.save(current_undo_state())
+        state = current_undo_state()
+        previous = undo_stack.buffer[undo_stack.index] if undo_stack.index >= 0 else None
+        if pose_snapshot_changed(previous, state):
+            undo_stack.save(state)
 
     def checkpoint_undo():
         """Remember this pose as the oldest state Ctrl+Z can reach."""
