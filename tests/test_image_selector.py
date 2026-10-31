@@ -249,6 +249,63 @@ def test_sort_image_paths():
     assert result == ['/path/c.jpg', '/path/b.jpg', '/path/a.jpg']
 
 
+def test_sort_image_paths_keeps_going_when_a_file_cannot_be_measured(tmp_path):
+    """A missing file used to mix a filename into the numeric keys and crash the sort."""
+    from image_selector import sort_image_paths
+
+    small = tmp_path / 'small.png'
+    large = tmp_path / 'large.png'
+    Image.new('RGB', (2, 2), 'red').save(small)
+    Image.new('RGB', (80, 80), 'blue').save(large)
+    missing = tmp_path / 'gone.png'
+    assert os.path.getsize(small) < os.path.getsize(large)
+
+    ordered = sort_image_paths(
+        [str(large), str(missing), str(small)], 'size', True
+    )
+    assert ordered == [str(missing), str(small), str(large)]
+
+    # Date sorts failed the same way: the fallback key was a string.
+    ordered = sort_image_paths([str(small), str(missing)], 'modified', False)
+    assert set(ordered) == {str(small), str(missing)}
+
+    # An unreadable image sorts as 0 pixels instead of aborting the folder.
+    bad = tmp_path / 'bad.png'
+    bad.write_bytes(b'not a png')
+    ordered = sort_image_paths([str(large), str(bad)], 'dimensions', True)
+    assert ordered == [str(bad), str(large)]
+
+    from image_selector import sort_images
+    loaded = Image.new('RGB', (3, 5), 'red')
+    images, ordered = sort_images(
+        [loaded, loaded], [str(missing), str(small)], 'size', True
+    )
+    assert ordered == [str(missing), str(small)]
+    assert images[0] is loaded
+
+
+def test_load_folder_async_keeps_images_when_one_cannot_be_measured(tmp_path, monkeypatch):
+    """A file that disappears during a size sort must not blank the folder."""
+    from image_selector import load_folder_async, os as selector_os
+
+    Image.new('RGB', (4, 4), 'red').save(tmp_path / 'a.png')
+    Image.new('RGB', (4, 4), 'blue').save(tmp_path / 'b.png')
+    real_getsize = selector_os.path.getsize
+
+    def flaky(path):
+        if str(path).endswith('b.png'):
+            raise OSError('gone')
+        return real_getsize(path)
+
+    monkeypatch.setattr(selector_os.path, 'getsize', flaky)
+    seen = []
+    thread = load_folder_async(
+        str(tmp_path), 1, True, ['name', 'size'], seen.append
+    )
+    thread.join(timeout=5)
+    assert seen and len(seen[0]) == 2
+
+
 def test_list_loadable_image_paths_closes_files(tmp_path, monkeypatch):
     """Browsing a folder must not keep every decoded image open."""
     from image_selector import list_loadable_image_paths, open_image
