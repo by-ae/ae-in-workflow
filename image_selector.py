@@ -922,24 +922,60 @@ def resolve_target_dimensions(selected_images, target_width_param=None, target_h
     return target_width, target_height
 
 
+def _empty_selection():
+    """Batch result used when nothing was selected or nothing could be opened."""
+    empty_tensor = torch.empty(0, 0, 0, 3)
+    empty_mask = torch.empty(0, 0, 0)
+    return [], [], empty_tensor, empty_mask
+
+
+def decode_image_paths(paths):
+    """Read each chosen file and close it before opening the next.
+
+    A path that fails to open is skipped. Holding every selection open at
+    once used to exhaust file handles on a large folder, after listing
+    itself had already been fixed to close each file.
+    """
+    decoded = []
+    for path in paths:
+        try:
+            img = open_image(path)
+        except Exception as e:
+            print(f"Failed to load selected image {path}: {e}")
+            continue
+        try:
+            tensor, mask = pil_to_tensor(img)
+            decoded.append((img.width, img.height, tensor, mask))
+        finally:
+            img.close()
+    return decoded
+
+
 def process_selected_images(images, selected_indices, target_width_param=None, target_height_param=None, padding_color="#000000"):
     """Process selected images into required formats"""
     if not selected_indices:
-        # Return empty tensors if nothing selected
-        empty_tensor = torch.empty(0, 0, 0, 3)
-        empty_mask = torch.empty(0, 0, 0)
-        return [], [], empty_tensor, empty_mask
+        return _empty_selection()
 
-    selected_images = [images[i] for i in selected_indices]
-
-    # Convert to tensors
-    image_list = []
-    mask_list = []
-
-    for img in selected_images:
+    decoded = []
+    for img in (images[i] for i in selected_indices):
         tensor, mask = pil_to_tensor(img)
-        image_list.append(tensor)
-        mask_list.append(mask)
+        decoded.append((img.width, img.height, tensor, mask))
+    return _batch_decoded_images(decoded, target_width_param, target_height_param, padding_color)
+
+
+def _batch_decoded_images(decoded, target_width_param=None, target_height_param=None, padding_color="#000000"):
+    """Resize decoded (width, height, image tensor, mask tensor) items into one batch."""
+    if not decoded:
+        return _empty_selection()
+
+    class _Size:
+        def __init__(self, width, height):
+            self.width = width
+            self.height = height
+
+    selected_images = [_Size(width, height) for width, height, _tensor, _mask in decoded]
+    image_list = [tensor for _width, _height, tensor, _mask in decoded]
+    mask_list = [mask for _width, _height, _tensor, mask in decoded]
 
     target_width, target_height = resolve_target_dimensions(
         selected_images, target_width_param, target_height_param
@@ -1029,9 +1065,7 @@ def image_selector(folder_path, target_width_param=None, target_height_param=Non
 
     if not paths:
         # Return empty results if no images found
-        empty_tensor = torch.empty(0, 0, 0, 3)
-        empty_mask = torch.empty(0, 0, 0)
-        return [], [], empty_tensor, empty_mask
+        return _empty_selection()
 
     # Sort paths initially (name ascending by default)
     paths = sort_image_paths(paths, 'name', True)
@@ -1039,11 +1073,14 @@ def image_selector(folder_path, target_width_param=None, target_height_param=Non
     # Show selection UI (will load images lazily)
     selected_paths = create_image_selector_ui(paths, folder_path, padding_color, target_width_param, target_height_param)
 
-    # Now load only the selected images
-    selected_images = load_selected_images(selected_paths)
-
-    # Process selected images
-    return process_selected_images(selected_images, list(range(len(selected_images))), target_width_param, target_height_param, padding_color)
+    # Decode one file at a time so a large selection does not keep every
+    # file handle open until the batch exists.
+    return _batch_decoded_images(
+        decode_image_paths(selected_paths),
+        target_width_param,
+        target_height_param,
+        padding_color,
+    )
 
 # Module exports for ComfyUI node
 __all__ = ['image_selector']

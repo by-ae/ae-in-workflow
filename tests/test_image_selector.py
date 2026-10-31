@@ -216,6 +216,65 @@ def test_open_image_without_exif_keeps_size(tmp_path):
     assert opened.size == (8, 4)
 
 
+def test_image_selector_decodes_one_file_at_a_time(tmp_path, monkeypatch):
+    """Choosing several images must not hold every file open at once."""
+    import image_selector
+    from image_selector import (
+        image_selector as run_selector,
+        load_selected_images,
+        open_image,
+        process_selected_images,
+    )
+
+    Image.new('RGB', (12, 8), 'red').save(tmp_path / 'plain.png')
+    rgba = Image.new('RGBA', (10, 6), (0, 0, 255, 0))
+    rgba.putpixel((1, 1), (255, 0, 0, 255))
+    rgba.save(tmp_path / 'clear.png')
+    _save_jpeg_with_orientation(tmp_path / 'turned.jpg', (8, 4), 6)
+
+    real_open = open_image
+    current = {'n': 0, 'max': 0}
+
+    def tracking(path):
+        img = real_open(path)
+        current['n'] += 1
+        current['max'] = max(current['max'], current['n'])
+        original_close = img.close
+
+        def close():
+            current['n'] -= 1
+            return original_close()
+
+        img.close = close
+        return img
+
+    chosen = {}
+
+    def fake_ui(paths, folder_path, padding_color, target_width, target_height):
+        chosen['paths'] = [str(tmp_path / 'missing.png')] + list(paths)
+        return chosen['paths']
+
+    monkeypatch.setattr(image_selector, 'open_image', tracking)
+    monkeypatch.setattr(image_selector, 'create_image_selector_ui', fake_ui)
+
+    _images, _masks, batch, mask_batch = run_selector(str(tmp_path), 40, 20, '#112233')
+    assert current['max'] == 1
+    assert current['n'] == 0
+
+    present = [path for path in chosen['paths'] if os.path.exists(path)]
+    loaded = load_selected_images(present)
+    try:
+        _a, _b, expected, expected_mask = process_selected_images(
+            loaded, list(range(len(loaded))), 40, 20, '#112233'
+        )
+    finally:
+        for img in loaded:
+            img.close()
+    assert batch.shape[0] == 3
+    assert torch.allclose(batch, expected)
+    assert torch.allclose(mask_batch, expected_mask)
+
+
 def test_load_selected_images_skips_unreadable(tmp_path):
     """One bad path does not drop the images that did open."""
     from image_selector import load_selected_images
