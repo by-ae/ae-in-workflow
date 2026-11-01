@@ -756,6 +756,300 @@ def test_keypoint_draw_colors_keeps_bone_colors_and_isolated_joints():
     assert drawn[1] == (1, [(1, 2, 3), (4, 5, 6)])
 
 
+def _fresh_pose_cache(monkeypatch, tmp_path):
+    """Point the pose and window caches at tmp_path and hide the desktop."""
+    import pose_editor
+
+    pose_editor.CACHE_DIR = None
+    pose_editor.CACHE_FILE = None
+    pose_editor.WINDOW_CACHE_FILE = None
+    monkeypatch.setattr(pose_editor.os.path, "expanduser", lambda _path: str(tmp_path))
+    monkeypatch.setattr(pose_editor, "get_window_position_fallback", lambda _title: None)
+    return pose_editor
+
+
+def _release_pose_cache():
+    import pose_editor
+
+    pose_editor.CACHE_DIR = None
+    pose_editor.CACHE_FILE = None
+    pose_editor.WINDOW_CACHE_FILE = None
+
+
+def test_parse_xwininfo_origin_accepts_negative_coordinates():
+    """A monitor to the left of the root origin is a negative X, which xwininfo prints."""
+    from pose_editor import parse_xwininfo_origin
+
+    text = "  Absolute upper-left X:  -83\n  Absolute upper-left Y:  201\n"
+    assert parse_xwininfo_origin(text) == (-83, 201)
+    assert parse_xwininfo_origin(
+        "Absolute upper-left X:  2\nAbsolute upper-left Y:  85\n"
+    ) == (2, 85)
+    assert parse_xwininfo_origin("Absolute upper-left X:  12\n") is None
+    assert parse_xwininfo_origin("") is None
+
+
+def test_reset_window_opens_at_the_default_not_the_cached_pose(monkeypatch, tmp_path):
+    """Resetting the window must not use a cached joint as the origin."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    cached = [{"canvas_width": 10, "canvas_height": 10, "people": [
+        {"pose_keypoints_2d": [3.0, 4.0, 1.0]},
+    ]}]
+    (tmp_path / "cache.json").write_text(
+        json.dumps({pose_editor.get_pose_hash(pose): cached})
+    )
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    opened = {}
+    real_set_mode = pygame.display.set_mode
+
+    def tracking_set_mode(size, *args, **kwargs):
+        opened["pos"] = pose_editor.os.environ.get("SDL_VIDEO_WINDOW_POS")
+        return real_set_mode(size, *args, **kwargs)
+
+    monkeypatch.setattr(pygame.display, "set_mode", tracking_set_mode)
+    try:
+        pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        _release_pose_cache()
+    assert opened["pos"] == "20,20"
+
+
+def test_window_position_is_kept_when_it_cannot_be_read(monkeypatch, tmp_path):
+    """Closing without a desktop position must not replace the restored origin."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    (tmp_path / "window_position.json").write_text(
+        json.dumps({"x": 400, "y": 300, "w": 800, "h": 600})
+    )
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=False)
+        saved = json.loads((tmp_path / "window_position.json").read_text())
+    finally:
+        _release_pose_cache()
+    assert saved["x"] == 400
+    assert saved["y"] == 300
+
+
+def test_reported_window_position_is_saved(monkeypatch, tmp_path):
+    """A position the desktop does report replaces the one from the last session."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(pose_editor, "get_window_position_fallback", lambda _title: (15, 25))
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+        saved = json.loads((tmp_path / "window_position.json").read_text())
+    finally:
+        _release_pose_cache()
+    assert saved["x"] == 15
+    assert saved["y"] == 25
+
+
+def test_unreadable_cached_pose_opens_the_original(monkeypatch, tmp_path):
+    """A cache entry that cannot be edited must not keep the window from opening."""
+    import json
+    import pygame
+
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    cached_values = (
+        ("short", [{"people": [{"pose_keypoints_2d": [1, 2]}]}]),
+        ("not-a-frame", ["nope"]),
+    )
+    for name, cached in cached_values:
+        folder = tmp_path / name
+        folder.mkdir()
+        editor = _fresh_pose_cache(monkeypatch, folder)
+        (folder / "cache.json").write_text(
+            json.dumps({editor.get_pose_hash(pose): cached})
+        )
+        try:
+            image, edited = editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+        finally:
+            _release_pose_cache()
+        assert image is not None and image.shape[0] == 1
+        assert len(edited[0]["people"]) == 1
+
+
+def test_readable_cached_pose_is_still_the_starting_point(monkeypatch, tmp_path):
+    """A cache entry that still decodes is what the editor opens."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    cached = [{"canvas_width": 10, "canvas_height": 10, "people": [
+        {"pose_keypoints_2d": [1.0, 2.0, 1.0]},
+        {"pose_keypoints_2d": [3.0, 4.0, 1.0]},
+    ]}]
+    (tmp_path / "cache.json").write_text(
+        json.dumps({pose_editor.get_pose_hash(pose): cached})
+    )
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    try:
+        _image, edited = pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        _release_pose_cache()
+    assert len(edited[0]["people"]) == 2
+
+
+def test_center_people_on_surface_moves_hidden_joints_with_the_pose():
+    """Hidden joints share the shift, so a stored origin does not become a new joint."""
+    from pose_editor import center_people_on_surface
+
+    points = [[[0.0, 0.0], [10.0, 0.0]]]
+    center_people_on_surface(points, [[0]], 200, 100)
+    assert points[0][0] == [100.0, 50.0]
+    assert points[0][1] == [110.0, 50.0]
+    untouched = [[[5.0, 5.0]]]
+    center_people_on_surface(untouched, [[]], 200, 100)
+    assert untouched[0][0] == [5.0, 5.0]
+
+
+def test_reset_recenters_in_the_resized_window(monkeypatch, tmp_path):
+    """Ctrl+O uses the window's current size, not the size from when it opened."""
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    seen = []
+    real_checkpoint = pose_editor.UndoStack.checkpoint
+
+    def spy(self, state):
+        point = state["people_keypoints"][0][0]
+        seen.append((point[0], point[1]))
+        return real_checkpoint(self, state)
+
+    monkeypatch.setattr(pose_editor.UndoStack, "checkpoint", spy)
+    monkeypatch.setattr(pygame.display, "get_window_size", lambda: (200, 100))
+
+    class _Keys:
+        def __getitem__(self, index):
+            return index in (pygame.K_LCTRL, pygame.K_RCTRL)
+
+    monkeypatch.setattr(pygame.key, "get_pressed", lambda: _Keys())
+    frames = [
+        [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_o)],
+        [pygame.event.Event(pygame.QUIT)],
+    ]
+    pending = {"frames": list(frames)}
+
+    def get_events():
+        if pending["frames"]:
+            return pending["frames"].pop(0)
+        return [pygame.event.Event(pygame.QUIT)]
+
+    monkeypatch.setattr(pygame.event, "get", get_events)
+    # (0, 0) is hidden even with a positive confidence, so the point has to
+    # start somewhere else or the editor has nothing to center.
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        pose_editor.pose_editor(
+            pose, padding=8, w=1024, h=1024, reset_cached_window_position=True
+        )
+    finally:
+        _release_pose_cache()
+    assert seen[0] == (512.0, 512.0)
+    assert seen[1] == (100.0, 50.0)
+
+
+def _one_sided_shoulder():
+    """Neck and a right shoulder. The left shoulder slot exists but is hidden."""
+    keypoints = [[0.0, 0.0] for _ in range(18)]
+    keypoints[1] = [100.0, 40.0]
+    keypoints[2] = [60.0, 50.0]
+    valid = [1, 2]
+    confidences = [0.0] * 18
+    confidences[1] = 1.0
+    confidences[2] = 0.8
+    return keypoints, valid, confidences
+
+
+def test_flip_moves_a_one_sided_joint_to_the_opposite_index():
+    """A mirror with only the right shoulder visible must label it as the left."""
+    from pose_editor import flip_person_horizontal, visible_pairs_and_colors
+
+    keypoints, valid, confidences = _one_sided_shoulder()
+    pair_rows = [visible_pairs_and_colors(valid)[0]]
+    color_rows = [visible_pairs_and_colors(valid)[1]]
+    flip_person_horizontal(
+        0, [keypoints], [valid], True, [confidences], pair_rows, color_rows
+    )
+    assert 1 in valid and 5 in valid and 2 not in valid
+    assert confidences[5] == 0.8 and confidences[2] == 0.0
+    # Neck is the mirror line, so the shoulder x goes from 60 to 140.
+    assert keypoints[5] == [140.0, 50.0]
+    assert (1, 5) in pair_rows[0] and (1, 2) not in pair_rows[0]
+    assert len(pair_rows[0]) == len(color_rows[0])
+
+
+def test_turn_around_keeps_a_one_sided_joint_on_its_index():
+    """Ctrl+Shift+R reflects the pose and does not exchange left and right."""
+    from pose_editor import flip_person_horizontal, visible_pairs_and_colors
+
+    keypoints, valid, confidences = _one_sided_shoulder()
+    pair_rows = [visible_pairs_and_colors(valid)[0]]
+    color_rows = [visible_pairs_and_colors(valid)[1]]
+    flip_person_horizontal(
+        0, [keypoints], [valid], False, [confidences], pair_rows, color_rows
+    )
+    assert valid == [1, 2]
+    assert confidences[2] == 0.8 and confidences[5] == 0.0
+    assert keypoints[2] == [140.0, 50.0]
+    assert (1, 2) in pair_rows[0] and (1, 5) not in pair_rows[0]
+
+
+def test_editor_mirror_saves_a_one_sided_joint_on_the_opposite_index(monkeypatch, tmp_path):
+    """Ctrl+R writes the visible shoulder onto the opposite joint."""
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+
+    class _Keys:
+        def __getitem__(self, index):
+            return index in (pygame.K_LCTRL, pygame.K_RCTRL)
+
+    monkeypatch.setattr(pygame.key, "get_pressed", lambda: _Keys())
+    frames = [
+        [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r)],
+        [pygame.event.Event(pygame.QUIT)],
+    ]
+    pending = {"frames": list(frames)}
+
+    def get_events():
+        if pending["frames"]:
+            return pending["frames"].pop(0)
+        return [pygame.event.Event(pygame.QUIT)]
+
+    monkeypatch.setattr(pygame.event, "get", get_events)
+    flat = []
+    for index in range(18):
+        if index == 1:
+            flat.extend([100.0, 40.0, 1.0])
+        elif index == 2:
+            flat.extend([60.0, 50.0, 1.0])
+        else:
+            flat.extend([0.0, 0.0, 0.0])
+    pose = [{"people": [{"pose_keypoints_2d": flat}]}]
+    try:
+        _image, edited = pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        _release_pose_cache()
+    saved = edited[0]["people"][0]["pose_keypoints_2d"]
+    assert saved[2 * 3 + 2] == 0.0
+    assert saved[5 * 3 + 2] == 1.0
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS

@@ -204,18 +204,46 @@ def get_descendants_with_neck_special_case(root_idx):
     else:
         return get_all_descendants(root_idx)
 
-def flip_person_horizontal(person_idx, people_keypoints, people_valid_keypoints, swap_left_right=True):
-    """Flip a person horizontally around their vertical center line"""
+def visible_pairs_and_colors(valid_keypoints):
+    """Bones whose endpoints are both visible, and the color of each bone."""
+    valid = set(valid_keypoints)
+    pairs = []
+    colors = []
+    for (start, end), color in zip(POSE_PAIRS, POSE_COLORS):
+        if start in valid and end in valid:
+            pairs.append((start, end))
+            colors.append(color)
+    return pairs, colors
+
+
+def flip_person_horizontal(
+    person_idx,
+    people_keypoints,
+    people_valid_keypoints,
+    swap_left_right=True,
+    people_original_confidences=None,
+    people_valid_pairs=None,
+    people_valid_colors=None,
+):
+    """Flip a person horizontally around their vertical center line.
+
+    `swap_left_right` exchanges each left/right pair so a mirror faces the
+    other way. A pair with only one visible joint still swaps: that joint
+    moves to the opposite index. Turn-around leaves the indices in place.
+    When pair lists are passed in they are rebuilt, because the visible
+    indices may have changed and the old bones would keep the previous side.
+    """
     keypoints = people_keypoints[person_idx]
+    valid = people_valid_keypoints[person_idx]
 
     # Find the vertical center line (average of shoulder positions or neck)
-    if 1 in people_valid_keypoints[person_idx]:  # neck
+    if 1 in valid:  # neck
         center_x = keypoints[1][0]
-    elif 2 in people_valid_keypoints[person_idx] and 5 in people_valid_keypoints[person_idx]:  # shoulders
+    elif 2 in valid and 5 in valid:  # shoulders
         center_x = (keypoints[2][0] + keypoints[5][0]) / 2
     else:
         # Fallback: use average of all valid keypoints
-        valid_points = [keypoints[j] for j in people_valid_keypoints[person_idx]]
+        valid_points = [keypoints[j] for j in valid]
         if valid_points:
             center_x = sum(p[0] for p in valid_points) / len(valid_points)
         else:
@@ -235,17 +263,52 @@ def flip_person_horizontal(person_idx, people_keypoints, people_valid_keypoints,
 
     # Flip coordinates horizontally
     for i in range(len(keypoints)):
-        if i in people_valid_keypoints[person_idx]:
+        if i in valid:
             # Reflect over center line
             keypoints[i][0] = 2 * center_x - keypoints[i][0]
 
     # Swap left-right keypoints if requested
     if swap_left_right:
+        confidences = None
+        if (
+            people_original_confidences is not None
+            and person_idx < len(people_original_confidences)
+        ):
+            confidences = people_original_confidences[person_idx]
         for left_idx, right_idx in lr_pairs:
-            if (left_idx in people_valid_keypoints[person_idx] and
-                right_idx in people_valid_keypoints[person_idx]):
-                # Swap the keypoints
-                keypoints[left_idx], keypoints[right_idx] = keypoints[right_idx], keypoints[left_idx]
+            if left_idx >= len(keypoints) or right_idx >= len(keypoints):
+                continue
+            left_on = left_idx in valid
+            right_on = right_idx in valid
+            if not left_on and not right_on:
+                continue
+            keypoints[left_idx], keypoints[right_idx] = keypoints[right_idx], keypoints[left_idx]
+            if left_on != right_on:
+                if left_on:
+                    valid.remove(left_idx)
+                    valid.append(right_idx)
+                else:
+                    valid.remove(right_idx)
+                    valid.append(left_idx)
+            if (
+                confidences is not None
+                and left_idx < len(confidences)
+                and right_idx < len(confidences)
+            ):
+                confidences[left_idx], confidences[right_idx] = (
+                    confidences[right_idx],
+                    confidences[left_idx],
+                )
+
+    if (
+        people_valid_pairs is not None
+        and people_valid_colors is not None
+        and person_idx < len(people_valid_pairs)
+        and person_idx < len(people_valid_colors)
+    ):
+        pairs, colors = visible_pairs_and_colors(valid)
+        people_valid_pairs[person_idx] = pairs
+        people_valid_colors[person_idx] = colors
 
 
 def _to_jsonable(value):
@@ -342,10 +405,41 @@ def people_state_from_frames(people_data):
     return people_keypoints, people_valid_keypoints, people_original_confidences
 
 
+def editable_people_state(pose_data):
+    """Return the first frame's joints, or raise ValueError if it cannot be edited.
+
+    A cached edit and the pose passed into the editor both go through this,
+    so a cache entry that no longer decodes can fall back to the original.
+    """
+    try:
+        people_data = pose_data[0]["people"]
+    except (TypeError, KeyError, IndexError) as e:
+        raise ValueError(f"Error parsing input data: {e}") from e
+    if not people_data:
+        raise ValueError("No people found in pose data")
+    return people_state_from_frames(people_data)
+
+
 def get_pose_hash(pose_data):
     """Generate a hash for the pose data to use as cache key"""
     pose_str = json.dumps(_to_jsonable(pose_data), sort_keys=True)
     return hashlib.md5(pose_str.encode()).hexdigest()
+
+def parse_xwininfo_origin(output):
+    """Return the absolute window origin from xwininfo text, or None.
+
+    The lines are `Absolute upper-left X:` and `Absolute upper-left Y:`.
+    The number is a signed integer: a window whose left edge is on a monitor
+    to the left of the root origin is negative.
+    """
+    if not output:
+        return None
+    abs_x = re.search(r"Absolute upper-left X:\s*([+-]?\d+)", output)
+    abs_y = re.search(r"Absolute upper-left Y:\s*([+-]?\d+)", output)
+    if abs_x is None or abs_y is None:
+        return None
+    return int(abs_x.group(1)), int(abs_y.group(1))
+
 
 def get_window_position_fallback(window_title):
     """Get window position using platform-specific system tools"""
@@ -357,12 +451,9 @@ def get_window_position_fallback(window_title):
             result = subprocess.run(['xwininfo', '-name', window_title],
                                   capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
-                output = result.stdout
-                abs_x_match = re.search(r'Absolute upper-left X:\s*(\d+)', output)
-                abs_y_match = re.search(r'Absolute upper-left Y:\s*(\d+)', output)
-
-                if abs_x_match and abs_y_match:
-                    return int(abs_x_match.group(1)), int(abs_y_match.group(1))
+                origin = parse_xwininfo_origin(result.stdout)
+                if origin is not None:
+                    return origin
         except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
             pass
 
@@ -704,6 +795,33 @@ def canvas_placement(points, padding, min_size=64, max_size=4096):
     return width, height, -padded_min_x, -padded_min_y, raw_w, raw_h
 
 
+def center_people_on_surface(people_keypoints, people_valid_keypoints, width, height):
+    """Shift every joint so the visible pose sits in the middle of the surface.
+
+    Hidden joints move by the same amount, so one that was stored at the
+    origin stays hidden. With no visible joint the pose is left where it is.
+    `width` and `height` are the surface the joints are drawn on.
+    """
+    if not people_keypoints:
+        return
+    all_valid_points = []
+    for person_idx in range(len(people_keypoints)):
+        valid_points = [
+            people_keypoints[person_idx][j] for j in people_valid_keypoints[person_idx]
+        ]
+        all_valid_points.extend(valid_points)
+    if not all_valid_points:
+        return
+    pose_center_x = sum(p[0] for p in all_valid_points) / len(all_valid_points)
+    pose_center_y = sum(p[1] for p in all_valid_points) / len(all_valid_points)
+    offset_x = (width // 2) - pose_center_x
+    offset_y = (height // 2) - pose_center_y
+    for person_keypoints in people_keypoints:
+        for point in person_keypoints:
+            point[0] += offset_x
+            point[1] += offset_y
+
+
 def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached_window_position=False):
     """
     Pose Editor - by-ae
@@ -769,50 +887,52 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
     except Exception as e:
         print(f"Cache read error: {e}")
 
+    editable = None
     if cached_data:
-        print("Loading cached pose data as starting point...")
-        print(f"Cached data type: {type(cached_data)}")
-        if isinstance(cached_data, list) and len(cached_data) > 0:
-            print(f"Cached canvas: {cached_data[0].get('canvas_width', '?')}x{cached_data[0].get('canvas_height', '?')}")
-            print(f"Cached people: {len(cached_data[0].get('people', []))}")
-            # Debug: check cached keypoints
-            for person_idx, person in enumerate(cached_data[0].get('people', [])):
-                pose = person.get('pose_keypoints_2d', [])
-                print(f"Cached person {person_idx}: {len(pose)//3} keypoints")
-                visible_count = 0
-                for i in range(len(pose)//3):
-                    x, y, conf = pose[3*i], pose[3*i+1], pose[3*i+2]
-                    if conf > 0:
-                        visible_count += 1
-                        print(f"  Keypoint {i}: ({x:.1f}, {y:.1f}) conf={conf}")
-                missing_count = (len(pose)//3) - visible_count
-                print(f"  Visible: {visible_count}, Missing: {missing_count}")
-        pose_data = cached_data  # Use cached data as starting point
-        print("Using cached data as input for editing")
-        # When using cached data, the cached confidences become the "original" confidences
+        try:
+            editable = editable_people_state(cached_data)
+        except ValueError as e:
+            # A stale or half-written cache entry must not block the pose
+            # the node was given. The next successful close replaces it.
+            print(f"Ignoring cached pose that cannot be edited: {e}")
+        else:
+            print("Loading cached pose data as starting point...")
+            print(f"Cached data type: {type(cached_data)}")
+            if isinstance(cached_data, list) and len(cached_data) > 0:
+                print(f"Cached canvas: {cached_data[0].get('canvas_width', '?')}x{cached_data[0].get('canvas_height', '?')}")
+                print(f"Cached people: {len(cached_data[0].get('people', []))}")
+                # Debug: check cached keypoints
+                for person_idx, person in enumerate(cached_data[0].get('people', [])):
+                    pose = person.get('pose_keypoints_2d', [])
+                    print(f"Cached person {person_idx}: {len(pose)//3} keypoints")
+                    visible_count = 0
+                    for i in range(len(pose)//3):
+                        # Not x, y: those names are the window origin parameters.
+                        joint_x, joint_y, conf = pose[3*i], pose[3*i+1], pose[3*i+2]
+                        if conf > 0:
+                            visible_count += 1
+                            print(f"  Keypoint {i}: ({joint_x:.1f}, {joint_y:.1f}) conf={conf}")
+                    missing_count = (len(pose)//3) - visible_count
+                    print(f"  Visible: {visible_count}, Missing: {missing_count}")
+            pose_data = cached_data  # Use cached data as starting point
+            print("Using cached data as input for editing")
+            # When using cached data, the cached confidences become the "original" confidences
     else:
         print("CACHE MISS - Starting with original input")
 
-    try:
-        people_data = pose_data[0]["people"]
-    except Exception as e:
-        print(f"Error parsing input data: {e}")
-        return None, None
+    if editable is None:
+        try:
+            editable = editable_people_state(original_input)
+        except ValueError as e:
+            print(f"Error: {e}")
+            return None, None
+        pose_data = original_input
 
-    # Validate people data
-    if not people_data:
-        print("Error: No people found in pose data")
-        return None, None
-
-    try:
-        (
-            people_keypoints,
-            people_valid_keypoints,
-            people_original_confidences,
-        ) = people_state_from_frames(people_data)
-    except ValueError as e:
-        print(f"Error: {e}")
-        return None, None
+    (
+        people_keypoints,
+        people_valid_keypoints,
+        people_original_confidences,
+    ) = editable
 
     # Store original positions before spacing (for duplication)
     original_people_keypoints = [keypoints.copy() for keypoints in people_keypoints]
@@ -844,31 +964,9 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
     # Handle people at same locations by spacing them out
     people_keypoints = space_out_people(people_keypoints, people_valid_keypoints)
 
-    # Center all people on the pygame surface
-    if people_keypoints:
-        # Use the surface dimensions for centering (not screen dimensions)
-        surface_center_x = window_w // 2
-        surface_center_y = window_h // 2
-
-        # Calculate center of all visible keypoints
-        all_valid_points = []
-        for person_idx in range(len(people_keypoints)):
-            valid_points = [people_keypoints[person_idx][j] for j in people_valid_keypoints[person_idx]]
-            all_valid_points.extend(valid_points)
-
-        if all_valid_points:
-            pose_center_x = sum(p[0] for p in all_valid_points) / len(all_valid_points)
-            pose_center_y = sum(p[1] for p in all_valid_points) / len(all_valid_points)
-
-            # Calculate offset to center the pose on the surface
-            offset_x = surface_center_x - pose_center_x
-            offset_y = surface_center_y - pose_center_y
-
-            # Apply centering offset to all keypoints
-            for person_keypoints in people_keypoints:
-                for point in person_keypoints:
-                    point[0] += offset_x
-                    point[1] += offset_y
+    # Center on the surface the window is about to open at. A resize after
+    # that is picked up when the pose is reset.
+    center_people_on_surface(people_keypoints, people_valid_keypoints, window_w, window_h)
 
     # Use the global pose structure constants
 
@@ -1054,31 +1152,13 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                         # Reset spacing
                         people_keypoints = space_out_people(people_keypoints, people_valid_keypoints)
 
-                        # Center all people on the pygame surface (same as initial loading)
-                        if people_keypoints:
-                            # Use the surface dimensions for centering (not screen dimensions)
-                            surface_center_x = window_w // 2
-                            surface_center_y = window_h // 2
-
-                            # Calculate center of all visible keypoints
-                            all_valid_points = []
-                            for person_idx in range(len(people_keypoints)):
-                                valid_points = [people_keypoints[person_idx][j] for j in people_valid_keypoints[person_idx]]
-                                all_valid_points.extend(valid_points)
-
-                            if all_valid_points:
-                                pose_center_x = sum(p[0] for p in all_valid_points) / len(all_valid_points)
-                                pose_center_y = sum(p[1] for p in all_valid_points) / len(all_valid_points)
-
-                                # Calculate offset to center the pose on the surface
-                                offset_x = surface_center_x - pose_center_x
-                                offset_y = surface_center_y - pose_center_y
-
-                                # Apply centering offset to all keypoints
-                                for person_keypoints_list in people_keypoints:
-                                    for point in person_keypoints_list:
-                                        point[0] += offset_x
-                                        point[1] += offset_y
+                        # window_w and window_h are the size from open. After a
+                        # resize they no longer match the window, and the reset
+                        # pose can land outside it.
+                        live_w, live_h = pygame.display.get_window_size()
+                        center_people_on_surface(
+                            people_keypoints, people_valid_keypoints, live_w, live_h
+                        )
 
                         # Reset selection
                         selected_person = 0
@@ -1167,13 +1247,29 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                     if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
                         # Ctrl+Shift+R: Flip horizontally without swapping keypoints (turn around)
                         if selected_person < len(people_keypoints):
-                            flip_person_horizontal(selected_person, people_keypoints, people_valid_keypoints, swap_left_right=False)
+                            flip_person_horizontal(
+                                selected_person,
+                                people_keypoints,
+                                people_valid_keypoints,
+                                swap_left_right=False,
+                                people_original_confidences=people_original_confidences,
+                                people_valid_pairs=people_valid_pairs,
+                                people_valid_colors=people_valid_colors,
+                            )
                             print(f"Flipped person {selected_person} horizontally (turned around)")
                             save_undo_state()
                     else:
                         # Ctrl+R: Flip horizontally with left/right keypoint swapping (mirror pose)
                         if selected_person < len(people_keypoints):
-                            flip_person_horizontal(selected_person, people_keypoints, people_valid_keypoints, swap_left_right=True)
+                            flip_person_horizontal(
+                                selected_person,
+                                people_keypoints,
+                                people_valid_keypoints,
+                                swap_left_right=True,
+                                people_original_confidences=people_original_confidences,
+                                people_valid_pairs=people_valid_pairs,
+                                people_valid_colors=people_valid_colors,
+                            )
                             print(f"Flipped person {selected_person} horizontally (mirrored pose)")
                             save_undo_state()
             elif event.type == pygame.KEYUP:
@@ -1500,8 +1596,10 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         # Get current window size
         current_size = pygame.display.get_window_size()
 
-        # Try to get window position using platform-specific tools
-        current_pos = (x, y)  # fallback to function defaults
+        # x, y are the hard-coded defaults. Writing those when the desktop
+        # cannot report a position replaces the location this window was
+        # opened at, including one restored from the last session.
+        current_pos = (window_x, window_y)
         pos_from_system = get_window_position_fallback("Pose Editor - ae")
         if pos_from_system:
             current_pos = pos_from_system
