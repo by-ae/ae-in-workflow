@@ -756,6 +756,106 @@ def test_keypoint_draw_colors_keeps_bone_colors_and_isolated_joints():
     assert drawn[1] == (1, [(1, 2, 3), (4, 5, 6)])
 
 
+def _fresh_pose_cache(monkeypatch, tmp_path):
+    """Point the pose and window caches at tmp_path and hide the desktop."""
+    import pose_editor
+
+    pose_editor.CACHE_DIR = None
+    pose_editor.CACHE_FILE = None
+    pose_editor.WINDOW_CACHE_FILE = None
+    monkeypatch.setattr(pose_editor.os.path, "expanduser", lambda _path: str(tmp_path))
+    monkeypatch.setattr(pose_editor, "get_window_position_fallback", lambda _title: None)
+    return pose_editor
+
+
+def _release_pose_cache():
+    import pose_editor
+
+    pose_editor.CACHE_DIR = None
+    pose_editor.CACHE_FILE = None
+    pose_editor.WINDOW_CACHE_FILE = None
+
+
+def test_parse_xwininfo_origin_accepts_negative_coordinates():
+    """A monitor to the left of the root origin is a negative X, which xwininfo prints."""
+    from pose_editor import parse_xwininfo_origin
+
+    text = "  Absolute upper-left X:  -83\n  Absolute upper-left Y:  201\n"
+    assert parse_xwininfo_origin(text) == (-83, 201)
+    assert parse_xwininfo_origin(
+        "Absolute upper-left X:  2\nAbsolute upper-left Y:  85\n"
+    ) == (2, 85)
+    assert parse_xwininfo_origin("Absolute upper-left X:  12\n") is None
+    assert parse_xwininfo_origin("") is None
+
+
+def test_reset_window_opens_at_the_default_not_the_cached_pose(monkeypatch, tmp_path):
+    """Resetting the window must not use a cached joint as the origin."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    cached = [{"canvas_width": 10, "canvas_height": 10, "people": [
+        {"pose_keypoints_2d": [3.0, 4.0, 1.0]},
+    ]}]
+    (tmp_path / "cache.json").write_text(
+        json.dumps({pose_editor.get_pose_hash(pose): cached})
+    )
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    opened = {}
+    real_set_mode = pygame.display.set_mode
+
+    def tracking_set_mode(size, *args, **kwargs):
+        opened["pos"] = pose_editor.os.environ.get("SDL_VIDEO_WINDOW_POS")
+        return real_set_mode(size, *args, **kwargs)
+
+    monkeypatch.setattr(pygame.display, "set_mode", tracking_set_mode)
+    try:
+        pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        _release_pose_cache()
+    assert opened["pos"] == "20,20"
+
+
+def test_window_position_is_kept_when_it_cannot_be_read(monkeypatch, tmp_path):
+    """Closing without a desktop position must not replace the restored origin."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    (tmp_path / "window_position.json").write_text(
+        json.dumps({"x": 400, "y": 300, "w": 800, "h": 600})
+    )
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=False)
+        saved = json.loads((tmp_path / "window_position.json").read_text())
+    finally:
+        _release_pose_cache()
+    assert saved["x"] == 400
+    assert saved["y"] == 300
+
+
+def test_reported_window_position_is_saved(monkeypatch, tmp_path):
+    """A position the desktop does report replaces the one from the last session."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(pose_editor, "get_window_position_fallback", lambda _title: (15, 25))
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+        saved = json.loads((tmp_path / "window_position.json").read_text())
+    finally:
+        _release_pose_cache()
+    assert saved["x"] == 15
+    assert saved["y"] == 25
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS

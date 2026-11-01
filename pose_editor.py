@@ -347,6 +347,22 @@ def get_pose_hash(pose_data):
     pose_str = json.dumps(_to_jsonable(pose_data), sort_keys=True)
     return hashlib.md5(pose_str.encode()).hexdigest()
 
+def parse_xwininfo_origin(output):
+    """Return the absolute window origin from xwininfo text, or None.
+
+    The lines are `Absolute upper-left X:` and `Absolute upper-left Y:`.
+    The number is a signed integer: a window whose left edge is on a monitor
+    to the left of the root origin is negative.
+    """
+    if not output:
+        return None
+    abs_x = re.search(r"Absolute upper-left X:\s*([+-]?\d+)", output)
+    abs_y = re.search(r"Absolute upper-left Y:\s*([+-]?\d+)", output)
+    if abs_x is None or abs_y is None:
+        return None
+    return int(abs_x.group(1)), int(abs_y.group(1))
+
+
 def get_window_position_fallback(window_title):
     """Get window position using platform-specific system tools"""
     system = platform.system()
@@ -357,12 +373,9 @@ def get_window_position_fallback(window_title):
             result = subprocess.run(['xwininfo', '-name', window_title],
                                   capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
-                output = result.stdout
-                abs_x_match = re.search(r'Absolute upper-left X:\s*(\d+)', output)
-                abs_y_match = re.search(r'Absolute upper-left Y:\s*(\d+)', output)
-
-                if abs_x_match and abs_y_match:
-                    return int(abs_x_match.group(1)), int(abs_y_match.group(1))
+                origin = parse_xwininfo_origin(result.stdout)
+                if origin is not None:
+                    return origin
         except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
             pass
 
@@ -781,10 +794,11 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                 print(f"Cached person {person_idx}: {len(pose)//3} keypoints")
                 visible_count = 0
                 for i in range(len(pose)//3):
-                    x, y, conf = pose[3*i], pose[3*i+1], pose[3*i+2]
+                    # Not x, y: those names are the window origin parameters.
+                    joint_x, joint_y, conf = pose[3*i], pose[3*i+1], pose[3*i+2]
                     if conf > 0:
                         visible_count += 1
-                        print(f"  Keypoint {i}: ({x:.1f}, {y:.1f}) conf={conf}")
+                        print(f"  Keypoint {i}: ({joint_x:.1f}, {joint_y:.1f}) conf={conf}")
                 missing_count = (len(pose)//3) - visible_count
                 print(f"  Visible: {visible_count}, Missing: {missing_count}")
         pose_data = cached_data  # Use cached data as starting point
@@ -1500,8 +1514,10 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         # Get current window size
         current_size = pygame.display.get_window_size()
 
-        # Try to get window position using platform-specific tools
-        current_pos = (x, y)  # fallback to function defaults
+        # x, y are the hard-coded defaults. Writing those when the desktop
+        # cannot report a position replaces the location this window was
+        # opened at, including one restored from the last session.
+        current_pos = (window_x, window_y)
         pos_from_system = get_window_position_fallback("Pose Editor - ae")
         if pos_from_system:
             current_pos = pos_from_system
