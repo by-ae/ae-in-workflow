@@ -904,6 +904,65 @@ def test_readable_cached_pose_is_still_the_starting_point(monkeypatch, tmp_path)
     assert len(edited[0]["people"]) == 2
 
 
+def test_center_people_on_surface_moves_hidden_joints_with_the_pose():
+    """Hidden joints share the shift, so a stored origin does not become a new joint."""
+    from pose_editor import center_people_on_surface
+
+    points = [[[0.0, 0.0], [10.0, 0.0]]]
+    center_people_on_surface(points, [[0]], 200, 100)
+    assert points[0][0] == [100.0, 50.0]
+    assert points[0][1] == [110.0, 50.0]
+    untouched = [[[5.0, 5.0]]]
+    center_people_on_surface(untouched, [[]], 200, 100)
+    assert untouched[0][0] == [5.0, 5.0]
+
+
+def test_reset_recenters_in_the_resized_window(monkeypatch, tmp_path):
+    """Ctrl+O uses the window's current size, not the size from when it opened."""
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    seen = []
+    real_checkpoint = pose_editor.UndoStack.checkpoint
+
+    def spy(self, state):
+        point = state["people_keypoints"][0][0]
+        seen.append((point[0], point[1]))
+        return real_checkpoint(self, state)
+
+    monkeypatch.setattr(pose_editor.UndoStack, "checkpoint", spy)
+    monkeypatch.setattr(pygame.display, "get_window_size", lambda: (200, 100))
+
+    class _Keys:
+        def __getitem__(self, index):
+            return index in (pygame.K_LCTRL, pygame.K_RCTRL)
+
+    monkeypatch.setattr(pygame.key, "get_pressed", lambda: _Keys())
+    frames = [
+        [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_o)],
+        [pygame.event.Event(pygame.QUIT)],
+    ]
+    pending = {"frames": list(frames)}
+
+    def get_events():
+        if pending["frames"]:
+            return pending["frames"].pop(0)
+        return [pygame.event.Event(pygame.QUIT)]
+
+    monkeypatch.setattr(pygame.event, "get", get_events)
+    # (0, 0) is hidden even with a positive confidence, so the point has to
+    # start somewhere else or the editor has nothing to center.
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        pose_editor.pose_editor(
+            pose, padding=8, w=1024, h=1024, reset_cached_window_position=True
+        )
+    finally:
+        _release_pose_cache()
+    assert seen[0] == (512.0, 512.0)
+    assert seen[1] == (100.0, 50.0)
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS

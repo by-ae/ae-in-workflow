@@ -732,6 +732,33 @@ def canvas_placement(points, padding, min_size=64, max_size=4096):
     return width, height, -padded_min_x, -padded_min_y, raw_w, raw_h
 
 
+def center_people_on_surface(people_keypoints, people_valid_keypoints, width, height):
+    """Shift every joint so the visible pose sits in the middle of the surface.
+
+    Hidden joints move by the same amount, so one that was stored at the
+    origin stays hidden. With no visible joint the pose is left where it is.
+    `width` and `height` are the surface the joints are drawn on.
+    """
+    if not people_keypoints:
+        return
+    all_valid_points = []
+    for person_idx in range(len(people_keypoints)):
+        valid_points = [
+            people_keypoints[person_idx][j] for j in people_valid_keypoints[person_idx]
+        ]
+        all_valid_points.extend(valid_points)
+    if not all_valid_points:
+        return
+    pose_center_x = sum(p[0] for p in all_valid_points) / len(all_valid_points)
+    pose_center_y = sum(p[1] for p in all_valid_points) / len(all_valid_points)
+    offset_x = (width // 2) - pose_center_x
+    offset_y = (height // 2) - pose_center_y
+    for person_keypoints in people_keypoints:
+        for point in person_keypoints:
+            point[0] += offset_x
+            point[1] += offset_y
+
+
 def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached_window_position=False):
     """
     Pose Editor - by-ae
@@ -874,31 +901,9 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
     # Handle people at same locations by spacing them out
     people_keypoints = space_out_people(people_keypoints, people_valid_keypoints)
 
-    # Center all people on the pygame surface
-    if people_keypoints:
-        # Use the surface dimensions for centering (not screen dimensions)
-        surface_center_x = window_w // 2
-        surface_center_y = window_h // 2
-
-        # Calculate center of all visible keypoints
-        all_valid_points = []
-        for person_idx in range(len(people_keypoints)):
-            valid_points = [people_keypoints[person_idx][j] for j in people_valid_keypoints[person_idx]]
-            all_valid_points.extend(valid_points)
-
-        if all_valid_points:
-            pose_center_x = sum(p[0] for p in all_valid_points) / len(all_valid_points)
-            pose_center_y = sum(p[1] for p in all_valid_points) / len(all_valid_points)
-
-            # Calculate offset to center the pose on the surface
-            offset_x = surface_center_x - pose_center_x
-            offset_y = surface_center_y - pose_center_y
-
-            # Apply centering offset to all keypoints
-            for person_keypoints in people_keypoints:
-                for point in person_keypoints:
-                    point[0] += offset_x
-                    point[1] += offset_y
+    # Center on the surface the window is about to open at. A resize after
+    # that is picked up when the pose is reset.
+    center_people_on_surface(people_keypoints, people_valid_keypoints, window_w, window_h)
 
     # Use the global pose structure constants
 
@@ -1084,31 +1089,13 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                         # Reset spacing
                         people_keypoints = space_out_people(people_keypoints, people_valid_keypoints)
 
-                        # Center all people on the pygame surface (same as initial loading)
-                        if people_keypoints:
-                            # Use the surface dimensions for centering (not screen dimensions)
-                            surface_center_x = window_w // 2
-                            surface_center_y = window_h // 2
-
-                            # Calculate center of all visible keypoints
-                            all_valid_points = []
-                            for person_idx in range(len(people_keypoints)):
-                                valid_points = [people_keypoints[person_idx][j] for j in people_valid_keypoints[person_idx]]
-                                all_valid_points.extend(valid_points)
-
-                            if all_valid_points:
-                                pose_center_x = sum(p[0] for p in all_valid_points) / len(all_valid_points)
-                                pose_center_y = sum(p[1] for p in all_valid_points) / len(all_valid_points)
-
-                                # Calculate offset to center the pose on the surface
-                                offset_x = surface_center_x - pose_center_x
-                                offset_y = surface_center_y - pose_center_y
-
-                                # Apply centering offset to all keypoints
-                                for person_keypoints_list in people_keypoints:
-                                    for point in person_keypoints_list:
-                                        point[0] += offset_x
-                                        point[1] += offset_y
+                        # window_w and window_h are the size from open. After a
+                        # resize they no longer match the window, and the reset
+                        # pose can land outside it.
+                        live_w, live_h = pygame.display.get_window_size()
+                        center_people_on_surface(
+                            people_keypoints, people_valid_keypoints, live_w, live_h
+                        )
 
                         # Reset selection
                         selected_person = 0
