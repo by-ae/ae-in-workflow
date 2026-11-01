@@ -963,6 +963,93 @@ def test_reset_recenters_in_the_resized_window(monkeypatch, tmp_path):
     assert seen[1] == (100.0, 50.0)
 
 
+def _one_sided_shoulder():
+    """Neck and a right shoulder. The left shoulder slot exists but is hidden."""
+    keypoints = [[0.0, 0.0] for _ in range(18)]
+    keypoints[1] = [100.0, 40.0]
+    keypoints[2] = [60.0, 50.0]
+    valid = [1, 2]
+    confidences = [0.0] * 18
+    confidences[1] = 1.0
+    confidences[2] = 0.8
+    return keypoints, valid, confidences
+
+
+def test_flip_moves_a_one_sided_joint_to_the_opposite_index():
+    """A mirror with only the right shoulder visible must label it as the left."""
+    from pose_editor import flip_person_horizontal, visible_pairs_and_colors
+
+    keypoints, valid, confidences = _one_sided_shoulder()
+    pair_rows = [visible_pairs_and_colors(valid)[0]]
+    color_rows = [visible_pairs_and_colors(valid)[1]]
+    flip_person_horizontal(
+        0, [keypoints], [valid], True, [confidences], pair_rows, color_rows
+    )
+    assert 1 in valid and 5 in valid and 2 not in valid
+    assert confidences[5] == 0.8 and confidences[2] == 0.0
+    # Neck is the mirror line, so the shoulder x goes from 60 to 140.
+    assert keypoints[5] == [140.0, 50.0]
+    assert (1, 5) in pair_rows[0] and (1, 2) not in pair_rows[0]
+    assert len(pair_rows[0]) == len(color_rows[0])
+
+
+def test_turn_around_keeps_a_one_sided_joint_on_its_index():
+    """Ctrl+Shift+R reflects the pose and does not exchange left and right."""
+    from pose_editor import flip_person_horizontal, visible_pairs_and_colors
+
+    keypoints, valid, confidences = _one_sided_shoulder()
+    pair_rows = [visible_pairs_and_colors(valid)[0]]
+    color_rows = [visible_pairs_and_colors(valid)[1]]
+    flip_person_horizontal(
+        0, [keypoints], [valid], False, [confidences], pair_rows, color_rows
+    )
+    assert valid == [1, 2]
+    assert confidences[2] == 0.8 and confidences[5] == 0.0
+    assert keypoints[2] == [140.0, 50.0]
+    assert (1, 2) in pair_rows[0] and (1, 5) not in pair_rows[0]
+
+
+def test_editor_mirror_saves_a_one_sided_joint_on_the_opposite_index(monkeypatch, tmp_path):
+    """Ctrl+R writes the visible shoulder onto the opposite joint."""
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+
+    class _Keys:
+        def __getitem__(self, index):
+            return index in (pygame.K_LCTRL, pygame.K_RCTRL)
+
+    monkeypatch.setattr(pygame.key, "get_pressed", lambda: _Keys())
+    frames = [
+        [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r)],
+        [pygame.event.Event(pygame.QUIT)],
+    ]
+    pending = {"frames": list(frames)}
+
+    def get_events():
+        if pending["frames"]:
+            return pending["frames"].pop(0)
+        return [pygame.event.Event(pygame.QUIT)]
+
+    monkeypatch.setattr(pygame.event, "get", get_events)
+    flat = []
+    for index in range(18):
+        if index == 1:
+            flat.extend([100.0, 40.0, 1.0])
+        elif index == 2:
+            flat.extend([60.0, 50.0, 1.0])
+        else:
+            flat.extend([0.0, 0.0, 0.0])
+    pose = [{"people": [{"pose_keypoints_2d": flat}]}]
+    try:
+        _image, edited = pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        _release_pose_cache()
+    saved = edited[0]["people"][0]["pose_keypoints_2d"]
+    assert saved[2 * 3 + 2] == 0.0
+    assert saved[5 * 3 + 2] == 1.0
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS

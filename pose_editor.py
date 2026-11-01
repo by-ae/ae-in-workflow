@@ -204,18 +204,46 @@ def get_descendants_with_neck_special_case(root_idx):
     else:
         return get_all_descendants(root_idx)
 
-def flip_person_horizontal(person_idx, people_keypoints, people_valid_keypoints, swap_left_right=True):
-    """Flip a person horizontally around their vertical center line"""
+def visible_pairs_and_colors(valid_keypoints):
+    """Bones whose endpoints are both visible, and the color of each bone."""
+    valid = set(valid_keypoints)
+    pairs = []
+    colors = []
+    for (start, end), color in zip(POSE_PAIRS, POSE_COLORS):
+        if start in valid and end in valid:
+            pairs.append((start, end))
+            colors.append(color)
+    return pairs, colors
+
+
+def flip_person_horizontal(
+    person_idx,
+    people_keypoints,
+    people_valid_keypoints,
+    swap_left_right=True,
+    people_original_confidences=None,
+    people_valid_pairs=None,
+    people_valid_colors=None,
+):
+    """Flip a person horizontally around their vertical center line.
+
+    `swap_left_right` exchanges each left/right pair so a mirror faces the
+    other way. A pair with only one visible joint still swaps: that joint
+    moves to the opposite index. Turn-around leaves the indices in place.
+    When pair lists are passed in they are rebuilt, because the visible
+    indices may have changed and the old bones would keep the previous side.
+    """
     keypoints = people_keypoints[person_idx]
+    valid = people_valid_keypoints[person_idx]
 
     # Find the vertical center line (average of shoulder positions or neck)
-    if 1 in people_valid_keypoints[person_idx]:  # neck
+    if 1 in valid:  # neck
         center_x = keypoints[1][0]
-    elif 2 in people_valid_keypoints[person_idx] and 5 in people_valid_keypoints[person_idx]:  # shoulders
+    elif 2 in valid and 5 in valid:  # shoulders
         center_x = (keypoints[2][0] + keypoints[5][0]) / 2
     else:
         # Fallback: use average of all valid keypoints
-        valid_points = [keypoints[j] for j in people_valid_keypoints[person_idx]]
+        valid_points = [keypoints[j] for j in valid]
         if valid_points:
             center_x = sum(p[0] for p in valid_points) / len(valid_points)
         else:
@@ -235,17 +263,52 @@ def flip_person_horizontal(person_idx, people_keypoints, people_valid_keypoints,
 
     # Flip coordinates horizontally
     for i in range(len(keypoints)):
-        if i in people_valid_keypoints[person_idx]:
+        if i in valid:
             # Reflect over center line
             keypoints[i][0] = 2 * center_x - keypoints[i][0]
 
     # Swap left-right keypoints if requested
     if swap_left_right:
+        confidences = None
+        if (
+            people_original_confidences is not None
+            and person_idx < len(people_original_confidences)
+        ):
+            confidences = people_original_confidences[person_idx]
         for left_idx, right_idx in lr_pairs:
-            if (left_idx in people_valid_keypoints[person_idx] and
-                right_idx in people_valid_keypoints[person_idx]):
-                # Swap the keypoints
-                keypoints[left_idx], keypoints[right_idx] = keypoints[right_idx], keypoints[left_idx]
+            if left_idx >= len(keypoints) or right_idx >= len(keypoints):
+                continue
+            left_on = left_idx in valid
+            right_on = right_idx in valid
+            if not left_on and not right_on:
+                continue
+            keypoints[left_idx], keypoints[right_idx] = keypoints[right_idx], keypoints[left_idx]
+            if left_on != right_on:
+                if left_on:
+                    valid.remove(left_idx)
+                    valid.append(right_idx)
+                else:
+                    valid.remove(right_idx)
+                    valid.append(left_idx)
+            if (
+                confidences is not None
+                and left_idx < len(confidences)
+                and right_idx < len(confidences)
+            ):
+                confidences[left_idx], confidences[right_idx] = (
+                    confidences[right_idx],
+                    confidences[left_idx],
+                )
+
+    if (
+        people_valid_pairs is not None
+        and people_valid_colors is not None
+        and person_idx < len(people_valid_pairs)
+        and person_idx < len(people_valid_colors)
+    ):
+        pairs, colors = visible_pairs_and_colors(valid)
+        people_valid_pairs[person_idx] = pairs
+        people_valid_colors[person_idx] = colors
 
 
 def _to_jsonable(value):
@@ -1184,13 +1247,29 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                     if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
                         # Ctrl+Shift+R: Flip horizontally without swapping keypoints (turn around)
                         if selected_person < len(people_keypoints):
-                            flip_person_horizontal(selected_person, people_keypoints, people_valid_keypoints, swap_left_right=False)
+                            flip_person_horizontal(
+                                selected_person,
+                                people_keypoints,
+                                people_valid_keypoints,
+                                swap_left_right=False,
+                                people_original_confidences=people_original_confidences,
+                                people_valid_pairs=people_valid_pairs,
+                                people_valid_colors=people_valid_colors,
+                            )
                             print(f"Flipped person {selected_person} horizontally (turned around)")
                             save_undo_state()
                     else:
                         # Ctrl+R: Flip horizontally with left/right keypoint swapping (mirror pose)
                         if selected_person < len(people_keypoints):
-                            flip_person_horizontal(selected_person, people_keypoints, people_valid_keypoints, swap_left_right=True)
+                            flip_person_horizontal(
+                                selected_person,
+                                people_keypoints,
+                                people_valid_keypoints,
+                                swap_left_right=True,
+                                people_original_confidences=people_original_confidences,
+                                people_valid_pairs=people_valid_pairs,
+                                people_valid_colors=people_valid_colors,
+                            )
                             print(f"Flipped person {selected_person} horizontally (mirrored pose)")
                             save_undo_state()
             elif event.type == pygame.KEYUP:
