@@ -76,6 +76,21 @@ def load_images_from_folder(folder_path):
 
     return images, paths
 
+def compose_thumbnail(img, size):
+    """Square RGB preview. Transparent pixels are composited onto black.
+
+    The grid background is black. Pasting an RGBA image without its alpha
+    draws the color stored in transparent pixels, so a cleared PNG looks solid.
+    """
+    rgba = img.convert('RGBA')
+    rgba.thumbnail(size, Image.Resampling.LANCZOS)
+    canvas = Image.new('RGB', size, (0, 0, 0))
+    x = (size[0] - rgba.width) // 2
+    y = (size[1] - rgba.height) // 2
+    canvas.paste(rgba, (x, y), rgba)
+    return canvas
+
+
 def create_thumbnail(img, size):
     """Create thumbnail maintaining aspect ratio"""
     img_ratio = img.width / img.height
@@ -367,91 +382,58 @@ def build_folder_tree(root_path, current_path):
 
     return tree_items
 
+_NUMERIC_SORT_MODES = ('size', 'modified', 'created', 'dimensions')
+
+
+def image_sort_key(path, sort_mode, image=None):
+    """Key for one path. Numeric modes always return a number.
+
+    A file that cannot be measured used to fall back to its filename. That
+    string was then compared with the numbers from the other files, and the
+    sort raised TypeError. The folder loader treats that as an empty folder.
+    """
+    try:
+        if sort_mode == 'size':
+            return os.path.getsize(path)
+        if sort_mode == 'modified':
+            return os.path.getmtime(path)
+        if sort_mode == 'created':
+            return os.path.getctime(path)
+        if sort_mode == 'dimensions':
+            if image is not None:
+                return image.width * image.height
+            try:
+                with Image.open(path) as img:
+                    return img.width * img.height
+            except Exception:
+                return 0
+        return os.path.basename(path).lower()
+    except Exception:
+        if sort_mode in _NUMERIC_SORT_MODES:
+            return 0
+        return os.path.basename(path).lower()
+
+
 def sort_image_paths(paths, sort_mode, ascending=True):
     """Sort image paths by specified criteria without loading images"""
     if not paths:
         return paths
 
-    # Create pairs of (path, sort_key)
-    pairs = []
-
-    for path in paths:
-        try:
-            if sort_mode == 'name':
-                sort_key = os.path.basename(path).lower()
-            elif sort_mode == 'size':
-                sort_key = os.path.getsize(path)
-            elif sort_mode == 'modified':
-                sort_key = os.path.getmtime(path)
-            elif sort_mode == 'created':
-                sort_key = os.path.getctime(path)
-            elif sort_mode == 'dimensions':
-                # For dimensions, we need to load the image temporarily
-                try:
-                    with Image.open(path) as img:
-                        sort_key = img.width * img.height  # Total pixels
-                except:
-                    sort_key = 0  # Fallback for unreadable images
-            else:
-                sort_key = os.path.basename(path).lower()  # Default to name
-        except:
-            sort_key = os.path.basename(path).lower()  # Fallback to name on error
-
-        pairs.append((path, sort_key))
-
-    # Sort the pairs
-    reverse = not ascending
-    if sort_mode in ['size', 'modified', 'created', 'dimensions']:
-        # Numeric sorting
-        pairs.sort(key=lambda x: x[1], reverse=reverse)
-    else:
-        # String sorting
-        pairs.sort(key=lambda x: x[1], reverse=reverse)
-
-    # Return sorted paths
-    return [pair[0] for pair in pairs]
+    pairs = [(path, image_sort_key(path, sort_mode)) for path in paths]
+    pairs.sort(key=lambda item: item[1], reverse=not ascending)
+    return [path for path, _key in pairs]
 
 def sort_images(images, paths, sort_mode, ascending=True):
     """Sort images and paths by specified criteria (legacy function for compatibility)"""
     if not images or not paths:
         return images, paths
 
-    # Create pairs of (image, path, sort_key)
-    pairs = []
-
-    for img, path in zip(images, paths):
-        try:
-            if sort_mode == 'name':
-                sort_key = os.path.basename(path).lower()
-            elif sort_mode == 'size':
-                sort_key = os.path.getsize(path)
-            elif sort_mode == 'modified':
-                sort_key = os.path.getmtime(path)
-            elif sort_mode == 'created':
-                sort_key = os.path.getctime(path)
-            elif sort_mode == 'dimensions':
-                sort_key = img.width * img.height  # Total pixels
-            else:
-                sort_key = os.path.basename(path).lower()  # Default to name
-        except:
-            sort_key = os.path.basename(path).lower()  # Fallback to name on error
-
-        pairs.append((img, path, sort_key))
-
-    # Sort the pairs
-    reverse = not ascending
-    if sort_mode in ['size', 'modified', 'created', 'dimensions']:
-        # Numeric sorting
-        pairs.sort(key=lambda x: x[2], reverse=reverse)
-    else:
-        # String sorting
-        pairs.sort(key=lambda x: x[2], reverse=reverse)
-
-    # Unpack back to separate lists
-    sorted_images = [pair[0] for pair in pairs]
-    sorted_paths = [pair[1] for pair in pairs]
-
-    return sorted_images, sorted_paths
+    pairs = [
+        (img, path, image_sort_key(path, sort_mode, image=img))
+        for img, path in zip(images, paths)
+    ]
+    pairs.sort(key=lambda item: item[2], reverse=not ascending)
+    return [img for img, _path, _key in pairs], [path for _img, path, _key in pairs]
 
 def pil_to_tensor(img):
     """Convert PIL image to torch tensor (1,H,W,3)
@@ -521,15 +503,7 @@ class LazyImageLoader:
             try:
                 img = open_image(path)
                 try:
-                    # Resize more efficiently
-                    img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
-                    # Create square thumbnail by padding
-                    thumb = Image.new('RGB', self.thumbnail_size, (0, 0, 0))
-                    x = (self.thumbnail_size[0] - img.width) // 2
-                    y = (self.thumbnail_size[1] - img.height) // 2
-                    thumb.paste(img, (x, y))
-
-                    # Convert PIL to pygame surface
+                    thumb = compose_thumbnail(img, self.thumbnail_size)
                     thumb_surface = pygame.image.fromstring(thumb.tobytes(), thumb.size, 'RGB')
                 finally:
                     img.close()
@@ -948,24 +922,60 @@ def resolve_target_dimensions(selected_images, target_width_param=None, target_h
     return target_width, target_height
 
 
+def _empty_selection():
+    """Batch result used when nothing was selected or nothing could be opened."""
+    empty_tensor = torch.empty(0, 0, 0, 3)
+    empty_mask = torch.empty(0, 0, 0)
+    return [], [], empty_tensor, empty_mask
+
+
+def decode_image_paths(paths):
+    """Read each chosen file and close it before opening the next.
+
+    A path that fails to open is skipped. Holding every selection open at
+    once used to exhaust file handles on a large folder, after listing
+    itself had already been fixed to close each file.
+    """
+    decoded = []
+    for path in paths:
+        try:
+            img = open_image(path)
+        except Exception as e:
+            print(f"Failed to load selected image {path}: {e}")
+            continue
+        try:
+            tensor, mask = pil_to_tensor(img)
+            decoded.append((img.width, img.height, tensor, mask))
+        finally:
+            img.close()
+    return decoded
+
+
 def process_selected_images(images, selected_indices, target_width_param=None, target_height_param=None, padding_color="#000000"):
     """Process selected images into required formats"""
     if not selected_indices:
-        # Return empty tensors if nothing selected
-        empty_tensor = torch.empty(0, 0, 0, 3)
-        empty_mask = torch.empty(0, 0, 0)
-        return [], [], empty_tensor, empty_mask
+        return _empty_selection()
 
-    selected_images = [images[i] for i in selected_indices]
-
-    # Convert to tensors
-    image_list = []
-    mask_list = []
-
-    for img in selected_images:
+    decoded = []
+    for img in (images[i] for i in selected_indices):
         tensor, mask = pil_to_tensor(img)
-        image_list.append(tensor)
-        mask_list.append(mask)
+        decoded.append((img.width, img.height, tensor, mask))
+    return _batch_decoded_images(decoded, target_width_param, target_height_param, padding_color)
+
+
+def _batch_decoded_images(decoded, target_width_param=None, target_height_param=None, padding_color="#000000"):
+    """Resize decoded (width, height, image tensor, mask tensor) items into one batch."""
+    if not decoded:
+        return _empty_selection()
+
+    class _Size:
+        def __init__(self, width, height):
+            self.width = width
+            self.height = height
+
+    selected_images = [_Size(width, height) for width, height, _tensor, _mask in decoded]
+    image_list = [tensor for _width, _height, tensor, _mask in decoded]
+    mask_list = [mask for _width, _height, _tensor, mask in decoded]
 
     target_width, target_height = resolve_target_dimensions(
         selected_images, target_width_param, target_height_param
@@ -1055,9 +1065,7 @@ def image_selector(folder_path, target_width_param=None, target_height_param=Non
 
     if not paths:
         # Return empty results if no images found
-        empty_tensor = torch.empty(0, 0, 0, 3)
-        empty_mask = torch.empty(0, 0, 0)
-        return [], [], empty_tensor, empty_mask
+        return _empty_selection()
 
     # Sort paths initially (name ascending by default)
     paths = sort_image_paths(paths, 'name', True)
@@ -1065,11 +1073,14 @@ def image_selector(folder_path, target_width_param=None, target_height_param=Non
     # Show selection UI (will load images lazily)
     selected_paths = create_image_selector_ui(paths, folder_path, padding_color, target_width_param, target_height_param)
 
-    # Now load only the selected images
-    selected_images = load_selected_images(selected_paths)
-
-    # Process selected images
-    return process_selected_images(selected_images, list(range(len(selected_images))), target_width_param, target_height_param, padding_color)
+    # Decode one file at a time so a large selection does not keep every
+    # file handle open until the batch exists.
+    return _batch_decoded_images(
+        decode_image_paths(selected_paths),
+        target_width_param,
+        target_height_param,
+        padding_color,
+    )
 
 # Module exports for ComfyUI node
 __all__ = ['image_selector']

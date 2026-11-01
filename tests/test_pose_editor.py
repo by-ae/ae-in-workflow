@@ -578,6 +578,184 @@ def test_editor_checkpoints_before_the_first_edit(monkeypatch, tmp_path):
     assert edited[0]["people"]
 
 
+def _pose_editor_with_events(monkeypatch, tmp_path, frames, get_pos):
+    """Open the editor with a scripted event list and return UndoStack.save calls."""
+    import pygame
+    import pose_editor
+
+    pose_editor.CACHE_DIR = None
+    pose_editor.CACHE_FILE = None
+    pose_editor.WINDOW_CACHE_FILE = None
+    monkeypatch.setattr(pose_editor.os.path, "expanduser", lambda _path: str(tmp_path))
+    monkeypatch.setattr(pose_editor, "get_window_position_fallback", lambda _title: None)
+
+    pending = list(frames)
+
+    def get_events():
+        if pending:
+            return pending.pop(0)
+        return [pygame.event.Event(pygame.QUIT)]
+
+    monkeypatch.setattr(pygame.event, "get", get_events)
+    monkeypatch.setattr(pygame.mouse, "get_pos", get_pos)
+
+    saves = []
+    real_save = pose_editor.UndoStack.save
+
+    def spy_save(self, state):
+        saves.append(state["people_keypoints"])
+        return real_save(self, state)
+
+    monkeypatch.setattr(pose_editor.UndoStack, "save", spy_save)
+
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        pose_editor.CACHE_DIR = None
+        pose_editor.CACHE_FILE = None
+        pose_editor.WINDOW_CACHE_FILE = None
+    return saves
+
+
+def test_click_without_moving_does_not_record_undo(monkeypatch, tmp_path):
+    """Releasing the mouse on an unmoved joint must not consume Ctrl+Z."""
+    import pygame
+    import pose_editor
+
+    aimed = {"pos": (0, 0)}
+    real_checkpoint = pose_editor.UndoStack.checkpoint
+
+    def spy_checkpoint(self, state):
+        point = state["people_keypoints"][0][0]
+        aimed["pos"] = (point[0], point[1])
+        return real_checkpoint(self, state)
+
+    monkeypatch.setattr(pose_editor.UndoStack, "checkpoint", spy_checkpoint)
+    frames = [
+        [pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(0, 0))],
+        [pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))],
+        [pygame.event.Event(pygame.QUIT)],
+    ]
+    saves = _pose_editor_with_events(monkeypatch, tmp_path, frames, lambda: aimed["pos"])
+    assert saves == []
+
+
+def test_drag_still_records_one_undo_step(monkeypatch, tmp_path):
+    """A joint that actually moves is still one undo step."""
+    import pygame
+    import pose_editor
+
+    aimed = {"pos": (0, 0)}
+    calls = {"n": 0}
+    real_checkpoint = pose_editor.UndoStack.checkpoint
+
+    def spy_checkpoint(self, state):
+        point = state["people_keypoints"][0][0]
+        aimed["pos"] = (point[0], point[1])
+        return real_checkpoint(self, state)
+
+    def get_pos():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return aimed["pos"]
+        return (aimed["pos"][0] + 15, aimed["pos"][1])
+
+    monkeypatch.setattr(pose_editor.UndoStack, "checkpoint", spy_checkpoint)
+    frames = [
+        [pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(0, 0))],
+        [],
+        [pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(0, 0))],
+        [pygame.event.Event(pygame.QUIT)],
+    ]
+    saves = _pose_editor_with_events(monkeypatch, tmp_path, frames, get_pos)
+    assert len(saves) == 1
+    assert saves[0][0][0][0] == aimed["pos"][0] + 15
+
+
+def test_pose_snapshot_changed_ignores_selection():
+    """Only keypoints, visibility, and confidences count as an edit."""
+    from pose_editor import pose_snapshot_changed
+
+    base = {
+        "people_keypoints": [[[1.0, 2.0]]],
+        "people_valid_keypoints": [{0}],
+        "people_original_confidences": [[1.0]],
+        "selected_person": 0,
+    }
+    assert pose_snapshot_changed(None, base) is True
+    assert pose_snapshot_changed(base, dict(base, selected_person=1)) is False
+    moved = {
+        "people_keypoints": [[[4.0, 2.0]]],
+        "people_valid_keypoints": [{0}],
+        "people_original_confidences": [[1.0]],
+        "selected_person": 0,
+    }
+    assert pose_snapshot_changed(base, moved) is True
+
+
+def test_editor_draws_a_joint_with_no_neighbor(monkeypatch, tmp_path):
+    """A visible joint with no bone must be drawn, not only its selection ring."""
+    import pygame
+    import pose_editor
+
+    pose_editor.CACHE_DIR = None
+    pose_editor.CACHE_FILE = None
+    pose_editor.WINDOW_CACHE_FILE = None
+    monkeypatch.setattr(pose_editor.os.path, "expanduser", lambda _path: str(tmp_path))
+    monkeypatch.setattr(pose_editor, "get_window_position_fallback", lambda _title: None)
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+
+    screen = {}
+    real_set_mode = pygame.display.set_mode
+
+    def tracking_set_mode(*args, **kwargs):
+        surface = real_set_mode(*args, **kwargs)
+        screen["surface"] = surface
+        return surface
+
+    monkeypatch.setattr(pygame.display, "set_mode", tracking_set_mode)
+
+    filled = []
+    real_circle = pygame.draw.circle
+
+    def tracking_circle(surface, color, center, radius, width=0):
+        if surface is screen.get("surface") and color == (255, 255, 255) and width == 0:
+            filled.append(radius)
+        return real_circle(surface, color, center, radius, width)
+
+    monkeypatch.setattr(pygame.draw, "circle", tracking_circle)
+
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        image, _edited = pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        pose_editor.CACHE_DIR = None
+        pose_editor.CACHE_FILE = None
+        pose_editor.WINDOW_CACHE_FILE = None
+
+    assert image is not None and float(image.max()) > 0
+    assert filled
+
+
+def test_keypoint_draw_colors_keeps_bone_colors_and_isolated_joints():
+    """Bone colors stay attached to their joints, and a lone joint is white."""
+    from pose_editor import keypoint_draw_colors
+
+    assert keypoint_draw_colors([10], [], []) == [(10, [(255, 255, 255)])]
+    assert keypoint_draw_colors([1, 2], [(1, 2)], [(152, 0, 0)]) == [
+        (1, [(152, 0, 0)]),
+        (2, [(152, 0, 0)]),
+    ]
+    # A joint on two bones is drawn once per bone, in pair order.
+    drawn = keypoint_draw_colors(
+        [0, 1, 2],
+        [(1, 0), (1, 2)],
+        [(1, 2, 3), (4, 5, 6)],
+    )
+    assert drawn[1] == (1, [(1, 2, 3), (4, 5, 6)])
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS

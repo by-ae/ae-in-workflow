@@ -77,6 +77,22 @@ class UndoStack:
             return self.buffer[self.index]
         return None
 
+
+def pose_snapshot_changed(previous, current):
+    """True when keypoints, visibility, or confidences differ.
+
+    Selection is ignored. Releasing the mouse after a click that did not
+    move a joint used to store the same pose again, so the next Ctrl+Z
+    looked like it did nothing.
+    """
+    if previous is None:
+        return True
+    return (
+        previous.get("people_keypoints") != current.get("people_keypoints")
+        or previous.get("people_valid_keypoints") != current.get("people_valid_keypoints")
+        or previous.get("people_original_confidences") != current.get("people_original_confidences")
+    )
+
 # Common pose structure (same for all people)
 # NOTE: Unsure if this is the correct "official order" as there was a lot of contradicting info on pose layouts
 # From what I gather the colors, order, etc. are essentially varioua, but this one mostly aligns with cnet preprocessor colors
@@ -609,6 +625,28 @@ def saved_keypoint_confidence(index, valid_indices):
     return 1.0 if index in valid_indices else 0.0
 
 
+ISOLATED_KEYPOINT_COLOR = (255, 255, 255)
+
+
+def keypoint_draw_colors(valid_keypoints, valid_pairs, valid_colors):
+    """Return (index, colors) for every visible joint.
+
+    Colors come from the bones that touch the joint. A joint whose neighbors
+    are all missing has no bone. It used to be skipped in the editor and drawn
+    white only in the saved image, so it could be grabbed but not seen. Both
+    places use this list.
+    """
+    keypoint_colors = {}
+    for (start, end), color in zip(valid_pairs, valid_colors):
+        keypoint_colors.setdefault(start, []).append(color)
+        keypoint_colors.setdefault(end, []).append(color)
+    drawn = []
+    for index in valid_keypoints:
+        colors = keypoint_colors.get(index) or [ISOLATED_KEYPOINT_COLOR]
+        drawn.append((index, colors))
+    return drawn
+
+
 def get_closest_person(mouse_pos, people_keypoints, people_valid_keypoints):
     """Find the person with the closest visible keypoint to the mouse position"""
     if not people_keypoints:
@@ -889,7 +927,10 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
 
     def save_undo_state():
         """Save current editor state to undo buffer"""
-        undo_stack.save(current_undo_state())
+        state = current_undo_state()
+        previous = undo_stack.buffer[undo_stack.index] if undo_stack.index >= 0 else None
+        if pose_snapshot_changed(previous, state):
+            undo_stack.save(state)
 
     def checkpoint_undo():
         """Remember this pose as the oldest state Ctrl+Z can reach."""
@@ -1316,26 +1357,13 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
                 darkened_col = tuple(int(c * 0.6) for c in col)
                 draw_rotated_ellipse(screen, darkened_col, center, ellipse_width, ellipse_height, angle)
 
-            # keypoints with colors matching their connecting bones
+            # keypoints with colors matching their connecting bones.
+            # A joint with no visible neighbor is drawn white, same as the saved image.
             keypoint_radius = thickness  # Same radius as the narrow side of bones
-
-            # Create mapping of keypoints to their connecting bone colors
-            keypoint_colors = {}
-            for (i, j), col in zip(valid_pairs, valid_colors):
-                if i not in keypoint_colors:
-                    keypoint_colors[i] = []
-                if j not in keypoint_colors:
-                    keypoint_colors[j] = []
-                keypoint_colors[i].append(col)
-                keypoint_colors[j].append(col)
-
-            # Draw keypoints in the bright colors of their connecting bones
-            for i in valid_keypoints:
-                if i in keypoint_colors:
-                    p = current_keypoints[i]
-                    # Draw the keypoint in each connecting bone color
-                    for col in keypoint_colors[i]:
-                        pygame.draw.circle(screen, col, tuple(map(int, p)), keypoint_radius)
+            for i, colors in keypoint_draw_colors(valid_keypoints, valid_pairs, valid_colors):
+                p = current_keypoints[i]
+                for col in colors:
+                    pygame.draw.circle(screen, col, tuple(map(int, p)), keypoint_radius)
 
             # Highlight selected person/keypoint
             if person_idx == selected_person:
@@ -1452,31 +1480,13 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
             darkened_col = tuple(int(c * 0.6) for c in col)
             draw_rotated_ellipse(surf, darkened_col, center, ellipse_width, ellipse_height, angle)
 
-        # Draw keypoints with colors matching their connecting bones
+        # Same joint colors as the editor, including a joint with no bone.
         keypoint_radius = thickness/2.0  # Same radius as the narrow side of bones
-
-        # Create mapping of keypoints to their connecting bone colors
-        keypoint_colors = {}
-        for (i, j), col in zip(valid_pairs, valid_colors):
-            if i not in keypoint_colors:
-                keypoint_colors[i] = []
-            if j not in keypoint_colors:
-                keypoint_colors[j] = []
-            keypoint_colors[i].append(col)
-            keypoint_colors[j].append(col)
-
-        # Draw keypoints in the bright colors of their connecting bones
-        for i in valid_keypoints:
+        for i, colors in keypoint_draw_colors(valid_keypoints, valid_pairs, valid_colors):
             p = current_keypoints[i]
             sp = (p[0] + offset_x, p[1] + offset_y)
-
-            if i in keypoint_colors and keypoint_colors[i]:
-                # Draw keypoint in colors of connecting bones
-                for col in keypoint_colors[i]:
-                    pygame.draw.circle(surf, col, tuple(map(int, sp)), keypoint_radius)
-            else:
-                # Draw isolated keypoints in white
-                pygame.draw.circle(surf, (255, 255, 255), tuple(map(int, sp)), keypoint_radius)
+            for col in colors:
+                pygame.draw.circle(surf, col, tuple(map(int, sp)), keypoint_radius)
 
     # Convert pygame surface to tensor with correct orientation
     arr = surfarray.array3d(surf)

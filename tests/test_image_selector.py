@@ -216,6 +216,65 @@ def test_open_image_without_exif_keeps_size(tmp_path):
     assert opened.size == (8, 4)
 
 
+def test_image_selector_decodes_one_file_at_a_time(tmp_path, monkeypatch):
+    """Choosing several images must not hold every file open at once."""
+    import image_selector
+    from image_selector import (
+        image_selector as run_selector,
+        load_selected_images,
+        open_image,
+        process_selected_images,
+    )
+
+    Image.new('RGB', (12, 8), 'red').save(tmp_path / 'plain.png')
+    rgba = Image.new('RGBA', (10, 6), (0, 0, 255, 0))
+    rgba.putpixel((1, 1), (255, 0, 0, 255))
+    rgba.save(tmp_path / 'clear.png')
+    _save_jpeg_with_orientation(tmp_path / 'turned.jpg', (8, 4), 6)
+
+    real_open = open_image
+    current = {'n': 0, 'max': 0}
+
+    def tracking(path):
+        img = real_open(path)
+        current['n'] += 1
+        current['max'] = max(current['max'], current['n'])
+        original_close = img.close
+
+        def close():
+            current['n'] -= 1
+            return original_close()
+
+        img.close = close
+        return img
+
+    chosen = {}
+
+    def fake_ui(paths, folder_path, padding_color, target_width, target_height):
+        chosen['paths'] = [str(tmp_path / 'missing.png')] + list(paths)
+        return chosen['paths']
+
+    monkeypatch.setattr(image_selector, 'open_image', tracking)
+    monkeypatch.setattr(image_selector, 'create_image_selector_ui', fake_ui)
+
+    _images, _masks, batch, mask_batch = run_selector(str(tmp_path), 40, 20, '#112233')
+    assert current['max'] == 1
+    assert current['n'] == 0
+
+    present = [path for path in chosen['paths'] if os.path.exists(path)]
+    loaded = load_selected_images(present)
+    try:
+        _a, _b, expected, expected_mask = process_selected_images(
+            loaded, list(range(len(loaded))), 40, 20, '#112233'
+        )
+    finally:
+        for img in loaded:
+            img.close()
+    assert batch.shape[0] == 3
+    assert torch.allclose(batch, expected)
+    assert torch.allclose(mask_batch, expected_mask)
+
+
 def test_load_selected_images_skips_unreadable(tmp_path):
     """One bad path does not drop the images that did open."""
     from image_selector import load_selected_images
@@ -247,6 +306,63 @@ def test_sort_image_paths():
     # Descending
     result = sort_image_paths(paths, 'name', False)
     assert result == ['/path/c.jpg', '/path/b.jpg', '/path/a.jpg']
+
+
+def test_sort_image_paths_keeps_going_when_a_file_cannot_be_measured(tmp_path):
+    """A missing file used to mix a filename into the numeric keys and crash the sort."""
+    from image_selector import sort_image_paths
+
+    small = tmp_path / 'small.png'
+    large = tmp_path / 'large.png'
+    Image.new('RGB', (2, 2), 'red').save(small)
+    Image.new('RGB', (80, 80), 'blue').save(large)
+    missing = tmp_path / 'gone.png'
+    assert os.path.getsize(small) < os.path.getsize(large)
+
+    ordered = sort_image_paths(
+        [str(large), str(missing), str(small)], 'size', True
+    )
+    assert ordered == [str(missing), str(small), str(large)]
+
+    # Date sorts failed the same way: the fallback key was a string.
+    ordered = sort_image_paths([str(small), str(missing)], 'modified', False)
+    assert set(ordered) == {str(small), str(missing)}
+
+    # An unreadable image sorts as 0 pixels instead of aborting the folder.
+    bad = tmp_path / 'bad.png'
+    bad.write_bytes(b'not a png')
+    ordered = sort_image_paths([str(large), str(bad)], 'dimensions', True)
+    assert ordered == [str(bad), str(large)]
+
+    from image_selector import sort_images
+    loaded = Image.new('RGB', (3, 5), 'red')
+    images, ordered = sort_images(
+        [loaded, loaded], [str(missing), str(small)], 'size', True
+    )
+    assert ordered == [str(missing), str(small)]
+    assert images[0] is loaded
+
+
+def test_load_folder_async_keeps_images_when_one_cannot_be_measured(tmp_path, monkeypatch):
+    """A file that disappears during a size sort must not blank the folder."""
+    from image_selector import load_folder_async, os as selector_os
+
+    Image.new('RGB', (4, 4), 'red').save(tmp_path / 'a.png')
+    Image.new('RGB', (4, 4), 'blue').save(tmp_path / 'b.png')
+    real_getsize = selector_os.path.getsize
+
+    def flaky(path):
+        if str(path).endswith('b.png'):
+            raise OSError('gone')
+        return real_getsize(path)
+
+    monkeypatch.setattr(selector_os.path, 'getsize', flaky)
+    seen = []
+    thread = load_folder_async(
+        str(tmp_path), 1, True, ['name', 'size'], seen.append
+    )
+    thread.join(timeout=5)
+    assert seen and len(seen[0]) == 2
 
 
 def test_list_loadable_image_paths_closes_files(tmp_path, monkeypatch):
@@ -303,6 +419,26 @@ def test_thumbnail_loader_closes_the_image(tmp_path, monkeypatch):
     thumb = LazyImageLoader([str(path)], thumbnail_size=(16, 16)).get_thumbnail(str(path))
     assert thumb is not None
     assert closed == [True]
+
+
+def test_thumbnail_keeps_transparent_pixels_empty(tmp_path):
+    """A cleared pixel must not show the color stored behind its alpha."""
+    from image_selector import LazyImageLoader
+
+    img = Image.new('RGBA', (8, 8), (255, 0, 0, 0))
+    img.putpixel((3, 4), (0, 255, 0, 255))
+    # Half-transparent blue, composited on the black grid, stays blue-black.
+    img.putpixel((1, 1), (0, 0, 255, 128))
+    path = tmp_path / 'clear.png'
+    img.save(path)
+
+    thumb = LazyImageLoader([str(path)], thumbnail_size=(8, 8)).get_thumbnail(str(path))
+    assert thumb is not None
+    assert thumb.get_at((0, 0))[:3] == (0, 0, 0)
+    assert thumb.get_at((3, 4))[:3] == (0, 255, 0)
+    blue = thumb.get_at((1, 1))
+    assert blue[0] == 0 and blue[1] == 0
+    assert 0 < blue[2] < 255
 
 
 def test_selection_toggle_label():
