@@ -342,6 +342,21 @@ def people_state_from_frames(people_data):
     return people_keypoints, people_valid_keypoints, people_original_confidences
 
 
+def editable_people_state(pose_data):
+    """Return the first frame's joints, or raise ValueError if it cannot be edited.
+
+    A cached edit and the pose passed into the editor both go through this,
+    so a cache entry that no longer decodes can fall back to the original.
+    """
+    try:
+        people_data = pose_data[0]["people"]
+    except (TypeError, KeyError, IndexError) as e:
+        raise ValueError(f"Error parsing input data: {e}") from e
+    if not people_data:
+        raise ValueError("No people found in pose data")
+    return people_state_from_frames(people_data)
+
+
 def get_pose_hash(pose_data):
     """Generate a hash for the pose data to use as cache key"""
     pose_str = json.dumps(_to_jsonable(pose_data), sort_keys=True)
@@ -782,51 +797,52 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
     except Exception as e:
         print(f"Cache read error: {e}")
 
+    editable = None
     if cached_data:
-        print("Loading cached pose data as starting point...")
-        print(f"Cached data type: {type(cached_data)}")
-        if isinstance(cached_data, list) and len(cached_data) > 0:
-            print(f"Cached canvas: {cached_data[0].get('canvas_width', '?')}x{cached_data[0].get('canvas_height', '?')}")
-            print(f"Cached people: {len(cached_data[0].get('people', []))}")
-            # Debug: check cached keypoints
-            for person_idx, person in enumerate(cached_data[0].get('people', [])):
-                pose = person.get('pose_keypoints_2d', [])
-                print(f"Cached person {person_idx}: {len(pose)//3} keypoints")
-                visible_count = 0
-                for i in range(len(pose)//3):
-                    # Not x, y: those names are the window origin parameters.
-                    joint_x, joint_y, conf = pose[3*i], pose[3*i+1], pose[3*i+2]
-                    if conf > 0:
-                        visible_count += 1
-                        print(f"  Keypoint {i}: ({joint_x:.1f}, {joint_y:.1f}) conf={conf}")
-                missing_count = (len(pose)//3) - visible_count
-                print(f"  Visible: {visible_count}, Missing: {missing_count}")
-        pose_data = cached_data  # Use cached data as starting point
-        print("Using cached data as input for editing")
-        # When using cached data, the cached confidences become the "original" confidences
+        try:
+            editable = editable_people_state(cached_data)
+        except ValueError as e:
+            # A stale or half-written cache entry must not block the pose
+            # the node was given. The next successful close replaces it.
+            print(f"Ignoring cached pose that cannot be edited: {e}")
+        else:
+            print("Loading cached pose data as starting point...")
+            print(f"Cached data type: {type(cached_data)}")
+            if isinstance(cached_data, list) and len(cached_data) > 0:
+                print(f"Cached canvas: {cached_data[0].get('canvas_width', '?')}x{cached_data[0].get('canvas_height', '?')}")
+                print(f"Cached people: {len(cached_data[0].get('people', []))}")
+                # Debug: check cached keypoints
+                for person_idx, person in enumerate(cached_data[0].get('people', [])):
+                    pose = person.get('pose_keypoints_2d', [])
+                    print(f"Cached person {person_idx}: {len(pose)//3} keypoints")
+                    visible_count = 0
+                    for i in range(len(pose)//3):
+                        # Not x, y: those names are the window origin parameters.
+                        joint_x, joint_y, conf = pose[3*i], pose[3*i+1], pose[3*i+2]
+                        if conf > 0:
+                            visible_count += 1
+                            print(f"  Keypoint {i}: ({joint_x:.1f}, {joint_y:.1f}) conf={conf}")
+                    missing_count = (len(pose)//3) - visible_count
+                    print(f"  Visible: {visible_count}, Missing: {missing_count}")
+            pose_data = cached_data  # Use cached data as starting point
+            print("Using cached data as input for editing")
+            # When using cached data, the cached confidences become the "original" confidences
     else:
         print("CACHE MISS - Starting with original input")
 
-    try:
-        people_data = pose_data[0]["people"]
-    except Exception as e:
-        print(f"Error parsing input data: {e}")
-        return None, None
+    if editable is None:
+        try:
+            editable = editable_people_state(original_input)
+        except ValueError as e:
+            print(f"Error: {e}")
+            return None, None
+        pose_data = original_input
 
-    # Validate people data
-    if not people_data:
-        print("Error: No people found in pose data")
-        return None, None
-
-    try:
-        (
-            people_keypoints,
-            people_valid_keypoints,
-            people_original_confidences,
-        ) = people_state_from_frames(people_data)
-    except ValueError as e:
-        print(f"Error: {e}")
-        return None, None
+    (
+        people_keypoints,
+        people_valid_keypoints,
+        people_original_confidences,
+    ) = editable
 
     # Store original positions before spacing (for duplication)
     original_people_keypoints = [keypoints.copy() for keypoints in people_keypoints]

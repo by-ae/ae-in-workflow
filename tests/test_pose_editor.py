@@ -856,6 +856,54 @@ def test_reported_window_position_is_saved(monkeypatch, tmp_path):
     assert saved["y"] == 25
 
 
+def test_unreadable_cached_pose_opens_the_original(monkeypatch, tmp_path):
+    """A cache entry that cannot be edited must not keep the window from opening."""
+    import json
+    import pygame
+
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    cached_values = (
+        ("short", [{"people": [{"pose_keypoints_2d": [1, 2]}]}]),
+        ("not-a-frame", ["nope"]),
+    )
+    for name, cached in cached_values:
+        folder = tmp_path / name
+        folder.mkdir()
+        editor = _fresh_pose_cache(monkeypatch, folder)
+        (folder / "cache.json").write_text(
+            json.dumps({editor.get_pose_hash(pose): cached})
+        )
+        try:
+            image, edited = editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+        finally:
+            _release_pose_cache()
+        assert image is not None and image.shape[0] == 1
+        assert len(edited[0]["people"]) == 1
+
+
+def test_readable_cached_pose_is_still_the_starting_point(monkeypatch, tmp_path):
+    """A cache entry that still decodes is what the editor opens."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    cached = [{"canvas_width": 10, "canvas_height": 10, "people": [
+        {"pose_keypoints_2d": [1.0, 2.0, 1.0]},
+        {"pose_keypoints_2d": [3.0, 4.0, 1.0]},
+    ]}]
+    (tmp_path / "cache.json").write_text(
+        json.dumps({pose_editor.get_pose_hash(pose): cached})
+    )
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    try:
+        _image, edited = pose_editor.pose_editor(pose, padding=8, reset_cached_window_position=True)
+    finally:
+        _release_pose_cache()
+    assert len(edited[0]["people"]) == 2
+
+
 def test_pose_pairs_structure():
     """Test that POSE_PAIRS structure is valid"""
     from pose_editor import POSE_PAIRS, POSE_COLORS
