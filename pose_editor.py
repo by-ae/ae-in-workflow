@@ -774,11 +774,15 @@ def draw_rotated_ellipse(surface, color, center, width, height, angle):
     surface.blit(rotated_surface, rect)
 
 def canvas_placement(points, padding, min_size=64, max_size=4096):
-    """Return canvas width, height, and the offset into that image.
+    """Return canvas width, height, offset, raw size, and scale.
 
     The canvas is the point bounds plus `padding` on every side. The offset
     is added to a point so it lands in the rendered image, whose origin is
     the top-left. A side is at least `min_size` and at most `max_size`.
+
+    `scale` is 1 when those bounds already fit. When they are larger than
+    `max_size`, one scale brings the far edge onto the last pixel so the
+    pose is not cut off. A pose smaller than `min_size` is not scaled up.
     """
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
@@ -792,7 +796,35 @@ def canvas_placement(points, padding, min_size=64, max_size=4096):
     raw_h = max(1, math.ceil(padded_max_y - padded_min_y + 1))
     width = min(max(raw_w, min_size), max_size)
     height = min(max(raw_h, min_size), max_size)
-    return width, height, -padded_min_x, -padded_min_y, raw_w, raw_h
+    scale = 1.0
+    if raw_w > width or raw_h > height:
+        fits = []
+        if raw_w > width and raw_w > 1:
+            fits.append((width - 1) / (raw_w - 1))
+        if raw_h > height and raw_h > 1:
+            fits.append((height - 1) / (raw_h - 1))
+        if fits:
+            scale = min(fits)
+    return width, height, -padded_min_x, -padded_min_y, raw_w, raw_h, scale
+
+
+def placed_point(point, offset_x, offset_y, scale, limit_w=None, limit_h=None):
+    """Map one joint onto the rendered image.
+
+    Scale stays 1 when the pose already fits, and the point is then the
+    same sum as before. A scaled point is kept on the last pixel so
+    rounding cannot leave it just outside the picture.
+    """
+    x = point[0] + offset_x
+    y = point[1] + offset_y
+    if scale != 1.0:
+        x *= scale
+        y *= scale
+        if limit_w is not None:
+            x = min(max(x, 0.0), limit_w - 1)
+        if limit_h is not None:
+            y = min(max(y, 0.0), limit_h - 1)
+    return x, y
 
 
 def center_people_on_surface(people_keypoints, people_valid_keypoints, width, height):
@@ -1533,8 +1565,9 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         empty_tensor = torch.zeros(1, 64, 64, 3)
         return empty_tensor, [{"canvas_height": 64, "canvas_width": 64, "people": []}]
 
-    # Canvas matches the crop drawn below. Saved keypoints add the same offset.
-    W, H, offset_x, offset_y, raw_W, raw_H = canvas_placement(all_points, padding)
+    # Canvas matches the crop drawn below. Saved keypoints use the same
+    # offset and, when the pose is wider than the cap, the same scale.
+    W, H, offset_x, offset_y, raw_W, raw_H, pose_scale = canvas_placement(all_points, padding)
     print(f"Surface size: {W}x{H} (raw: {raw_W}x{raw_H})")
 
     try:
@@ -1557,8 +1590,8 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
 
         # Draw bones
         for (i, j), col in zip(valid_pairs, valid_colors):
-            p1 = np.array([current_keypoints[i][0] + offset_x, current_keypoints[i][1] + offset_y])
-            p2 = np.array([current_keypoints[j][0] + offset_x, current_keypoints[j][1] + offset_y])
+            p1 = np.array(placed_point(current_keypoints[i], offset_x, offset_y, pose_scale, W, H))
+            p2 = np.array(placed_point(current_keypoints[j], offset_x, offset_y, pose_scale, W, H))
 
             # Calculate center point (mY, mX in OpenPose notation)
             center = ((p1 + p2) / 2).astype(int)
@@ -1579,8 +1612,7 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         # Same joint colors as the editor, including a joint with no bone.
         keypoint_radius = thickness/2.0  # Same radius as the narrow side of bones
         for i, colors in keypoint_draw_colors(valid_keypoints, valid_pairs, valid_colors):
-            p = current_keypoints[i]
-            sp = (p[0] + offset_x, p[1] + offset_y)
+            sp = placed_point(current_keypoints[i], offset_x, offset_y, pose_scale, W, H)
             for col in colors:
                 pygame.draw.circle(surf, col, tuple(map(int, sp)), keypoint_radius)
 
@@ -1633,7 +1665,8 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         for keypoint_idx, point in enumerate(person_keypoints):
             confidence = saved_keypoint_confidence(keypoint_idx, valid_indices)
             # Same shift used to draw the crop, so the list matches the image.
-            pose_keypoints_2d.extend([point[0] + offset_x, point[1] + offset_y, confidence])
+            placed_x, placed_y = placed_point(point, offset_x, offset_y, pose_scale, W, H)
+            pose_keypoints_2d.extend([placed_x, placed_y, confidence])
         updated_pose_data["people"].append({
             "pose_keypoints_2d": pose_keypoints_2d
         })

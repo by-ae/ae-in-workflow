@@ -388,19 +388,25 @@ def test_get_nearest_bone():
 
 def test_canvas_placement_keeps_padding_around_the_pose():
     """Saved points use the same origin as the cropped render."""
-    from pose_editor import canvas_placement
+    from pose_editor import canvas_placement, placed_point
 
     # Large enough that the 64px minimum does not add extra space.
-    width, height, offset_x, offset_y, raw_w, raw_h = canvas_placement(
+    width, height, offset_x, offset_y, raw_w, raw_h, scale = canvas_placement(
         [(0, 0), (200, 180)], padding=10
     )
     assert (width, height) == (raw_w, raw_h) == (221, 201)
+    assert scale == 1.0
     # The leftmost and topmost points sit `padding` pixels in from the edge.
     assert 0 + offset_x == 10
     assert 0 + offset_y == 10
     # The right and bottom padding is the same, on the last pixel of the canvas.
     assert width - 1 - (200 + offset_x) == 10
     assert height - 1 - (180 + offset_y) == 10
+    # A pose that already fits is not rescaled, so the saved point stays put.
+    assert placed_point((200, 180), offset_x, offset_y, scale, width, height) == (
+        200 + offset_x,
+        180 + offset_y,
+    )
 
 
 def test_nearest_visible_keypoint_ignores_hidden_joints():
@@ -491,16 +497,27 @@ def test_saved_keypoint_confidence_stays_zero_when_hidden():
 
 def test_canvas_placement_clamps_to_minimum_and_maximum():
     """A tiny pose still gets a 64px canvas, and a huge one stops at 4096."""
-    from pose_editor import canvas_placement
+    from pose_editor import canvas_placement, placed_point
 
-    width, height, _, _, raw_w, raw_h = canvas_placement([(0, 0), (10, 4)], padding=0)
+    width, height, _, _, raw_w, raw_h, scale = canvas_placement([(0, 0), (10, 4)], padding=0)
     assert raw_w == 11 and raw_h == 5
     assert width == 64 and height == 64
+    # Extra pixels from the minimum size stay empty. The pose is not stretched.
+    assert scale == 1.0
 
-    width, height, _, _, raw_w, _ = canvas_placement([(0, 0), (10000, 5)], padding=0)
+    width, height, offset_x, offset_y, raw_w, _, scale = canvas_placement(
+        [(0, 0), (10000, 5)], padding=0
+    )
     assert raw_w == 10001
     assert width == 4096
     assert height == 64
+    assert scale < 1.0
+    right = placed_point((10000, 5), offset_x, offset_y, scale, width, height)
+    left = placed_point((0, 0), offset_x, offset_y, scale, width, height)
+    assert left == (0, 0)
+    assert 0 <= right[0] <= width - 1
+    assert 0 <= right[1] <= height - 1
+    assert right[0] > width - 2
 
 
 def test_undo_stack_reaches_the_checkpoint():
@@ -1007,6 +1024,34 @@ def test_turn_around_keeps_a_one_sided_joint_on_its_index():
     assert confidences[2] == 0.8 and confidences[5] == 0.0
     assert keypoints[2] == [140.0, 50.0]
     assert (1, 2) in pair_rows[0] and (1, 5) not in pair_rows[0]
+
+
+def test_editor_saves_an_oversized_pose_inside_the_image(monkeypatch, tmp_path):
+    """A pose wider than 4096 used to keep coordinates past the cropped picture."""
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    # (0, 0) is hidden even with a positive confidence, so both joints sit
+    # off the origin. The gap is wider than the 4096 output cap.
+    flat = [10.0, 10.0, 1.0, 10010.0, 10.0, 1.0]
+    pose = [{"people": [{"pose_keypoints_2d": flat}]}]
+    try:
+        image, edited = pose_editor.pose_editor(
+            pose, padding=0, reset_cached_window_position=True
+        )
+    finally:
+        _release_pose_cache()
+    frame = edited[0]
+    width, height = frame["canvas_width"], frame["canvas_height"]
+    assert image.shape[1] == height and image.shape[2] == width
+    assert width <= 4096 and height <= 4096
+    saved = frame["people"][0]["pose_keypoints_2d"]
+    xs = [saved[i] for i in range(0, len(saved), 3) if saved[i + 2] > 0]
+    ys = [saved[i + 1] for i in range(0, len(saved), 3) if saved[i + 2] > 0]
+    assert xs and max(xs) - min(xs) > 1000
+    assert min(xs) >= 0 and max(xs) <= width - 1
+    assert min(ys) >= 0 and max(ys) <= height - 1
 
 
 def test_editor_mirror_saves_a_one_sided_joint_on_the_opposite_index(monkeypatch, tmp_path):
