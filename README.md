@@ -254,7 +254,7 @@ This node crops images based on mask boundaries, with two modes for different us
 
 #### Inputs:
 - **images** (required): Batch of images to crop (B,H,W,C)
-- **masks** (required): Corresponding masks defining crop boundaries (B,H,W). A single mask shaped (H,W) is one item. A size-1 channel, (B,H,W,1) or (B,1,H,W), is removed. Any other shape stops the node and names the shape it received
+- **masks** (required): Corresponding masks defining crop boundaries (B,H,W). A single mask shaped (H,W) or (H,W,1) is one item. A size-1 channel, (B,H,W,1) or (B,1,H,W), is removed. A one-pixel side is still that side, so (B,H,1) is a batch of narrow masks and (B,1,H,1) is the same batch with a leading channel. Any other shape stops the node and names the shape it received
 - **invert_mask** (optional): Invert masks before finding bounds (default: False)
 - **mode** (optional): Cropping mode - "mask_for_each" or "sum_of_masks" (default: "mask_for_each")
 - **padding_color** (optional): Hex color for padding areas (default: "#000000")
