@@ -183,6 +183,22 @@ def test_interpolate_error_handling():
         node.interpolate_floats([1.0, 2.0], count=3)
 
 
+def test_interpolate_rejects_non_finite_tokens():
+    """nan and inf used to pass float() and land in the schedule."""
+    from __init__ import InterpolateFloatListNodeAE
+
+    node = InterpolateFloatListNodeAE()
+    with pytest.raises(ValueError, match="could not parse: nan, inf"):
+        node.interpolate_floats("nan, inf", count=3)
+    with pytest.raises(ValueError, match="could not parse: 1e309"):
+        node.interpolate_floats("1.0, 1e309", count=2)
+    with pytest.raises(ValueError, match="could not parse: -Infinity"):
+        node.interpolate_floats("-Infinity", count=2)
+
+    result_list, _ = node.interpolate_floats("1e-3", count=2, interpolate_across_count=True)
+    assert result_list == [0.001, 0.001]
+
+
 def test_interpolate_mixed_valid_invalid():
     """Test with mix of valid and invalid values"""
     from __init__ import InterpolateFloatListNodeAE

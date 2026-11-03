@@ -335,7 +335,7 @@ Turns a comma-separated list of numbers into a fixed-length list. Use it when a 
 #### Usage Notes:
 - One input number, with interpolation on, is repeated `count` times
 - An empty string with interpolation on and `count` above 0 becomes that many `1.0` values. With `count` at 0 the result is an empty list
-- A token that is not a number, such as `abc`, raises an error that names the token
+- A token that is not a finite number, such as `abc` or `inf`, raises an error that names the token
 
 ## Usage Examples
 

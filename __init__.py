@@ -15,6 +15,7 @@ Utils:
 
 import os
 import sys
+import math
 import torch
 import numpy as np
 from PIL import Image
@@ -996,7 +997,7 @@ class InterpolateFloatListNodeAE:
             tuple: (list of processed float values, comma-separated string of values)
 
         Raises:
-            ValueError: If floats is not a string or contains a non-numeric token
+            ValueError: If floats is not a string or contains a non-finite token
         """
         if not isinstance(floats, str):
             raise ValueError(
@@ -1011,9 +1012,16 @@ class InterpolateFloatListNodeAE:
         invalid = []
         for token in tokens:
             try:
-                values.append(float(token))
+                value = float(token)
             except ValueError:
                 invalid.append(token)
+                continue
+            # float("nan") and float("inf") succeed. They are not usable
+            # schedule values, same as a non-finite LoRA weight.
+            if not math.isfinite(value):
+                invalid.append(token)
+                continue
+            values.append(value)
         if invalid:
             shown = ", ".join(invalid[:5])
             raise ValueError(
