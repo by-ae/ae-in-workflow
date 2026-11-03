@@ -519,6 +519,63 @@ def get_window_position_fallback(window_title):
 
     return None
 
+
+def _finite_window_int(value):
+    """Return value as an int, or None when it cannot be a window coordinate."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return int(value)
+
+
+def window_geometry(cached, default_x, default_y, default_w, default_h, min_size=64):
+    """Return x, y, width, height for the editor window.
+
+    A negative origin is kept. A size below `min_size`, or a value that is
+    not a finite number, uses the default size. pygame raises for a negative
+    size, so the editor never opens. On pygame 2.6.1 a width of 0 came back
+    as 1 pixel and 0x0 came back as a large window, and that size is what
+    gets saved for the next run.
+    """
+    if not isinstance(cached, dict):
+        cached = {}
+    origin_x = _finite_window_int(cached.get("x", default_x))
+    origin_y = _finite_window_int(cached.get("y", default_y))
+    width = _finite_window_int(cached.get("w", default_w))
+    height = _finite_window_int(cached.get("h", default_h))
+    if origin_x is None:
+        origin_x = default_x
+    if origin_y is None:
+        origin_y = default_y
+    if width is None or height is None or width < min_size or height < min_size:
+        width, height = default_w, default_h
+    return origin_x, origin_y, width, height
+
+
+def open_pose_window(origin_x, origin_y, width, height, fallback):
+    """Open the editor window, retrying the default geometry if pygame refuses.
+
+    `fallback` is (x, y, width, height). The geometry that actually opened
+    is returned with the screen, so a later save does not write the size
+    pygame rejected.
+    """
+    attempts = [(origin_x, origin_y, width, height)]
+    fallback = tuple(fallback)
+    if attempts[0] != fallback:
+        attempts.append(fallback)
+    error = None
+    for ox, oy, ow, oh in attempts:
+        os.environ["SDL_VIDEO_WINDOW_POS"] = f"{ox},{oy}"
+        try:
+            screen = pygame.display.set_mode((int(ow), int(oh)), pygame.RESIZABLE)
+            return screen, ox, oy, ow, oh
+        except pygame.error as exc:
+            error = exc
+            print(f"Could not open the pose editor at ({ox}, {oy}) size {ow}x{oh}: {exc}")
+    raise error
+
+
 def create_t_pose():
     """Create a natural-looking T-pose template based on human proportions"""
     # Natural T-pose keypoints (x, y) coordinates
@@ -774,11 +831,15 @@ def draw_rotated_ellipse(surface, color, center, width, height, angle):
     surface.blit(rotated_surface, rect)
 
 def canvas_placement(points, padding, min_size=64, max_size=4096):
-    """Return canvas width, height, and the offset into that image.
+    """Return canvas width, height, offset, raw size, and scale.
 
     The canvas is the point bounds plus `padding` on every side. The offset
     is added to a point so it lands in the rendered image, whose origin is
     the top-left. A side is at least `min_size` and at most `max_size`.
+
+    `scale` is 1 when those bounds already fit. When they are larger than
+    `max_size`, one scale brings the far edge onto the last pixel so the
+    pose is not cut off. A pose smaller than `min_size` is not scaled up.
     """
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
@@ -792,7 +853,35 @@ def canvas_placement(points, padding, min_size=64, max_size=4096):
     raw_h = max(1, math.ceil(padded_max_y - padded_min_y + 1))
     width = min(max(raw_w, min_size), max_size)
     height = min(max(raw_h, min_size), max_size)
-    return width, height, -padded_min_x, -padded_min_y, raw_w, raw_h
+    scale = 1.0
+    if raw_w > width or raw_h > height:
+        fits = []
+        if raw_w > width and raw_w > 1:
+            fits.append((width - 1) / (raw_w - 1))
+        if raw_h > height and raw_h > 1:
+            fits.append((height - 1) / (raw_h - 1))
+        if fits:
+            scale = min(fits)
+    return width, height, -padded_min_x, -padded_min_y, raw_w, raw_h, scale
+
+
+def placed_point(point, offset_x, offset_y, scale, limit_w=None, limit_h=None):
+    """Map one joint onto the rendered image.
+
+    Scale stays 1 when the pose already fits, and the point is then the
+    same sum as before. A scaled point is kept on the last pixel so
+    rounding cannot leave it just outside the picture.
+    """
+    x = point[0] + offset_x
+    y = point[1] + offset_y
+    if scale != 1.0:
+        x *= scale
+        y *= scale
+        if limit_w is not None:
+            x = min(max(x, 0.0), limit_w - 1)
+        if limit_h is not None:
+            y = min(max(y, 0.0), limit_h - 1)
+    return x, y
 
 
 def center_people_on_surface(people_keypoints, people_valid_keypoints, width, height):
@@ -948,13 +1037,11 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
             get_cache_dir()  # Ensure cache dir is initialized
             if os.path.exists(WINDOW_CACHE_FILE):
                 with open(WINDOW_CACHE_FILE, 'r') as f:
-                    cached_data = json.load(f)
-                    if isinstance(cached_data, dict):
-                        # Load cached values if they exist, otherwise use defaults
-                        window_x = cached_data.get('x', x)
-                        window_y = cached_data.get('y', y)
-                        window_w = cached_data.get('w', w)
-                        window_h = cached_data.get('h', h)
+                    cached_window = json.load(f)
+                    if isinstance(cached_window, dict):
+                        window_x, window_y, window_w, window_h = window_geometry(
+                            cached_window, x, y, w, h
+                        )
                         print(f"Loaded cached window: {window_x}, {window_y}, {window_w}x{window_h}")
                     else:
                         print("Invalid cached window data format")
@@ -980,10 +1067,12 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         people_valid_pairs.append(valid_pairs)
         people_valid_colors.append(valid_colors)
 
-    # Find the currently focused window and match its cached position/size
+    # Find the currently focused window and match its cached position/size.
+    # A size pygame rejects opens at the default instead of failing the run.
     print(f"Creating window at ({window_x}, {window_y}) with size ({window_w}, {window_h})")
-    os.environ['SDL_VIDEO_WINDOW_POS'] = f"{window_x},{window_y}"
-    screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
+    screen, window_x, window_y, window_w, window_h = open_pose_window(
+        window_x, window_y, window_w, window_h, (x, y, w, h)
+    )
     pygame.display.set_caption("Pose Editor - ae")
     print(f"Window created, actual size: {pygame.display.get_window_size()}")
 
@@ -1533,8 +1622,9 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         empty_tensor = torch.zeros(1, 64, 64, 3)
         return empty_tensor, [{"canvas_height": 64, "canvas_width": 64, "people": []}]
 
-    # Canvas matches the crop drawn below. Saved keypoints add the same offset.
-    W, H, offset_x, offset_y, raw_W, raw_H = canvas_placement(all_points, padding)
+    # Canvas matches the crop drawn below. Saved keypoints use the same
+    # offset and, when the pose is wider than the cap, the same scale.
+    W, H, offset_x, offset_y, raw_W, raw_H, pose_scale = canvas_placement(all_points, padding)
     print(f"Surface size: {W}x{H} (raw: {raw_W}x{raw_H})")
 
     try:
@@ -1557,8 +1647,8 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
 
         # Draw bones
         for (i, j), col in zip(valid_pairs, valid_colors):
-            p1 = np.array([current_keypoints[i][0] + offset_x, current_keypoints[i][1] + offset_y])
-            p2 = np.array([current_keypoints[j][0] + offset_x, current_keypoints[j][1] + offset_y])
+            p1 = np.array(placed_point(current_keypoints[i], offset_x, offset_y, pose_scale, W, H))
+            p2 = np.array(placed_point(current_keypoints[j], offset_x, offset_y, pose_scale, W, H))
 
             # Calculate center point (mY, mX in OpenPose notation)
             center = ((p1 + p2) / 2).astype(int)
@@ -1579,8 +1669,7 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         # Same joint colors as the editor, including a joint with no bone.
         keypoint_radius = thickness/2.0  # Same radius as the narrow side of bones
         for i, colors in keypoint_draw_colors(valid_keypoints, valid_pairs, valid_colors):
-            p = current_keypoints[i]
-            sp = (p[0] + offset_x, p[1] + offset_y)
+            sp = placed_point(current_keypoints[i], offset_x, offset_y, pose_scale, W, H)
             for col in colors:
                 pygame.draw.circle(surf, col, tuple(map(int, sp)), keypoint_radius)
 
@@ -1633,7 +1722,8 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         for keypoint_idx, point in enumerate(person_keypoints):
             confidence = saved_keypoint_confidence(keypoint_idx, valid_indices)
             # Same shift used to draw the crop, so the list matches the image.
-            pose_keypoints_2d.extend([point[0] + offset_x, point[1] + offset_y, confidence])
+            placed_x, placed_y = placed_point(point, offset_x, offset_y, pose_scale, W, H)
+            pose_keypoints_2d.extend([placed_x, placed_y, confidence])
         updated_pose_data["people"].append({
             "pose_keypoints_2d": pose_keypoints_2d
         })

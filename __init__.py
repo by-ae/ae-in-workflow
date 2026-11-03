@@ -15,6 +15,7 @@ Utils:
 
 import os
 import sys
+import math
 import torch
 import numpy as np
 from PIL import Image
@@ -421,22 +422,59 @@ class ImageSelectorNodeAE:
             raise e
 
 
-def normalize_mask_batch(masks):
+def normalize_mask_batch(masks, images=None):
     """Return a mask batch shaped (batch, height, width).
 
-    A lone mask is (height, width). A mask copied from an image often keeps a
-    size-1 channel, either (batch, height, width, 1) or (batch, 1, height, width).
-    Those are the same mask. Anything else is returned unchanged so the caller
-    can report the shape it actually received.
+    A lone mask is (height, width), or (height, width, 1) when it was sliced
+    off an image. A batch copied from an image often keeps a size-1 channel,
+    either (batch, height, width, 1) or (batch, 1, height, width).
+
+    When both layouts are possible, the one that matches `images` is used.
+    A one-pixel side is still that side: (batch, height, 1) stays a batch of
+    narrow masks, and (batch, 1, height, 1) is that batch with a leading
+    channel. Anything else is returned unchanged so the caller can report
+    the shape it actually received.
     """
     if not isinstance(masks, torch.Tensor):
         return masks
+
+    image_bhw = None
+    if isinstance(images, torch.Tensor) and images.ndim == 4:
+        image_bhw = (int(images.shape[0]), int(images.shape[1]), int(images.shape[2]))
+
+    def matches(candidate):
+        return (
+            image_bhw is not None
+            and candidate.ndim == 3
+            and tuple(int(size) for size in candidate.shape) == image_bhw
+        )
+
     if masks.ndim == 2:
         return masks.unsqueeze(0)
-    if masks.ndim == 4 and masks.shape[-1] == 1:
-        return masks.squeeze(-1)
-    if masks.ndim == 4 and masks.shape[1] == 1:
+
+    if masks.ndim == 3 and int(masks.shape[-1]) == 1:
+        if matches(masks):
+            return masks
+        as_single = masks.squeeze(-1).unsqueeze(0)
+        if matches(as_single):
+            return as_single
+        return masks
+
+    if masks.ndim == 4 and (int(masks.shape[-1]) == 1 or int(masks.shape[1]) == 1):
+        candidates = []
+        if int(masks.shape[-1]) == 1:
+            candidates.append(masks.squeeze(-1))
+        if int(masks.shape[1]) == 1:
+            leading = masks.squeeze(1)
+            if not candidates or tuple(leading.shape) != tuple(candidates[0].shape):
+                candidates.append(leading)
+        for candidate in candidates:
+            if matches(candidate):
+                return candidate
+        if int(masks.shape[-1]) == 1:
+            return masks.squeeze(-1)
         return masks.squeeze(1)
+
     return masks
 
 
@@ -454,7 +492,7 @@ class CropImageBatchToMaskBoundsNodeAE:
         return {
             "required": {
                 "images": ("IMAGE", {"tooltip": "Batch of images to crop (shape: B,H,W,C)"}),
-                "masks": ("MASK", {"tooltip": "Batch of masks defining crop boundaries (shape: B,H,W). A single (H,W) mask is accepted, as is a size-1 channel on either side."}),
+                "masks": ("MASK", {"tooltip": "Batch of masks defining crop boundaries (shape: B,H,W). A single (H,W) or (H,W,1) mask is accepted, as is a size-1 channel. A one-pixel side stays a side."}),
             },
             "optional": {
                 "invert_mask": ("BOOLEAN", {
@@ -527,7 +565,7 @@ class CropImageBatchToMaskBoundsNodeAE:
         if not isinstance(images, torch.Tensor):
             raise ValueError(f"images must be a torch.Tensor, got {type(images).__name__}")
 
-        masks = normalize_mask_batch(masks)
+        masks = normalize_mask_batch(masks, images)
         if not isinstance(masks, torch.Tensor):
             raise ValueError(f"masks must be a torch.Tensor, got {type(masks).__name__}")
         
@@ -959,7 +997,7 @@ class InterpolateFloatListNodeAE:
             tuple: (list of processed float values, comma-separated string of values)
 
         Raises:
-            ValueError: If floats is not a string or contains a non-numeric token
+            ValueError: If floats is not a string or contains a non-finite token
         """
         if not isinstance(floats, str):
             raise ValueError(
@@ -974,9 +1012,16 @@ class InterpolateFloatListNodeAE:
         invalid = []
         for token in tokens:
             try:
-                values.append(float(token))
+                value = float(token)
             except ValueError:
                 invalid.append(token)
+                continue
+            # float("nan") and float("inf") succeed. They are not usable
+            # schedule values, same as a non-finite LoRA weight.
+            if not math.isfinite(value):
+                invalid.append(token)
+                continue
+            values.append(value)
         if invalid:
             shown = ", ".join(invalid[:5])
             raise ValueError(

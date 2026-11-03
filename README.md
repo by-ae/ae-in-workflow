@@ -254,7 +254,7 @@ This node crops images based on mask boundaries, with two modes for different us
 
 #### Inputs:
 - **images** (required): Batch of images to crop (B,H,W,C)
-- **masks** (required): Corresponding masks defining crop boundaries (B,H,W). A single mask shaped (H,W) is one item. A size-1 channel, (B,H,W,1) or (B,1,H,W), is removed. Any other shape stops the node and names the shape it received
+- **masks** (required): Corresponding masks defining crop boundaries (B,H,W). A single mask shaped (H,W) or (H,W,1) is one item. A size-1 channel, (B,H,W,1) or (B,1,H,W), is removed. A one-pixel side is still that side, so (B,H,1) is a batch of narrow masks and (B,1,H,1) is the same batch with a leading channel. Any other shape stops the node and names the shape it received
 - **invert_mask** (optional): Invert masks before finding bounds (default: False)
 - **mode** (optional): Cropping mode - "mask_for_each" or "sum_of_masks" (default: "mask_for_each")
 - **padding_color** (optional): Hex color for padding areas (default: "#000000")
@@ -311,9 +311,9 @@ An interactive pose editor that allows users to manipulate OpenPose keypoints wi
 - **Numeric types**: Keypoint values may be plain numbers, NumPy scalars, a NumPy array (flat or rows of x, y, confidence), or a PyTorch tensor of numbers. The editor opens on those instead of returning a black image. Ctrl+O decodes the original input the same way, so a reset can be saved
 - **Keypoints**: 18 points in the order listed above, the layout used by the common ControlNet OpenPose preprocessor
 - **Confidence Values**: Only keypoints with confidence above 0.0 and a non-zero position are drawn and can be dragged. The saved pose uses confidence 1 for those joints and 0 for the rest, so a joint stored at (0, 0) does not come back as a new point
-- **Window**: Position and size are remembered. If the window is off screen, turn on `reset_cached_window_position` once
+- **Window**: Position and size are remembered. If the window is off screen, turn on `reset_cached_window_position` once. A saved size below 64 pixels, or a size pygame rejects, opens at 1024×1024 instead. A position left of the origin is kept
 - **Output Format**: `edited_pose_data` can be passed into another Pose Editor or into nodes that take this 18-keypoint list
-- **Coordinates**: Saved keypoints use the rendered image. The origin is that image's top-left, and `padding` is inside the image, so a joint lines up with the picture
+- **Coordinates**: Saved keypoints use the rendered image. The origin is that image's top-left, and `padding` is inside the image, so a joint lines up with the picture. The picture is at most 4096 pixels on a side. A larger pose is scaled down so every joint still lands on it; a pose smaller than 64 pixels is not scaled up
 
 ### Interpolate Float List (ae)
 
@@ -335,7 +335,7 @@ Turns a comma-separated list of numbers into a fixed-length list. Use it when a 
 #### Usage Notes:
 - One input number, with interpolation on, is repeated `count` times
 - An empty string with interpolation on and `count` above 0 becomes that many `1.0` values. With `count` at 0 the result is an empty list
-- A token that is not a number, such as `abc`, raises an error that names the token
+- A token that is not a finite number, such as `abc` or `inf`, raises an error that names the token
 
 ## Usage Examples
 

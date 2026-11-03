@@ -596,6 +596,60 @@ def test_crop_accepts_single_mask_and_size_one_channel():
     assert torch.equal(from_2d, from_leading)
 
 
+def test_crop_accepts_unbatched_channel_and_narrow_channel_first_mask():
+    """(H, W, 1) is one mask, and a 1px-wide channel-first mask keeps its side."""
+    from __init__ import CropImageBatchToMaskBoundsNodeAE
+
+    node = CropImageBatchToMaskBoundsNodeAE()
+    images = torch.zeros(1, 8, 8, 3)
+    images[0, 2:5, 1:4, 0] = 1.0
+    flat = torch.zeros(8, 8)
+    flat[2:5, 1:4] = 1.0
+
+    from_hw1, mask_hw1 = node.crop_to_mask_bounds(
+        images, flat.unsqueeze(-1), mode="sum_of_masks", color_fill_mask=False
+    )
+    from_hw, _ = node.crop_to_mask_bounds(
+        images, flat, mode="sum_of_masks", color_fill_mask=False
+    )
+    assert from_hw1.shape == (1, 3, 3, 3)
+    assert int((mask_hw1 > 0.5).sum()) == 9
+    assert torch.equal(from_hw1, from_hw)
+
+    # A second image must not treat (H, W, 1) as a batch of H rows.
+    with pytest.raises(ValueError, match="same batch size"):
+        node.crop_to_mask_bounds(
+            torch.zeros(2, 8, 8, 3), flat.unsqueeze(-1), mode="sum_of_masks"
+        )
+
+    narrow = torch.zeros(1, 8, 1, 3)
+    narrow[0, 2:6, 0, :] = 1.0
+    channel_first = torch.zeros(1, 1, 8, 1)
+    channel_first[0, 0, 2:6, 0] = 1.0
+    plain = torch.zeros(1, 8, 1)
+    plain[0, 2:6, 0] = 1.0
+    from_channel, mask_channel = node.crop_to_mask_bounds(
+        narrow, channel_first, mode="sum_of_masks", color_fill_mask=False
+    )
+    from_plain, _ = node.crop_to_mask_bounds(
+        narrow, plain, mode="sum_of_masks", color_fill_mask=False
+    )
+    assert from_channel.shape == (1, 4, 1, 3)
+    assert int((mask_channel > 0.5).sum()) == 4
+    assert torch.equal(from_channel, from_plain)
+
+    # (B, H, 1) is a batch of narrow masks, not a channel to squeeze away.
+    batch_images = torch.zeros(2, 6, 1, 3)
+    batch_images[:, :, 0, :] = 1.0
+    batch_masks = torch.zeros(2, 6, 1)
+    batch_masks[0, 1:3, 0] = 1.0
+    batch_masks[1, 0:4, 0] = 1.0
+    batched, _ = node.crop_to_mask_bounds(
+        batch_images, batch_masks, mode="mask_for_each", color_fill_mask=False
+    )
+    assert batched.shape == (2, 4, 1, 3)
+
+
 def test_crop_rejects_zero_height_or_width():
     """A 0-pixel side reports the shape instead of dividing by zero later."""
     from __init__ import CropImageBatchToMaskBoundsNodeAE
