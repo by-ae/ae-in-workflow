@@ -519,6 +519,63 @@ def get_window_position_fallback(window_title):
 
     return None
 
+
+def _finite_window_int(value):
+    """Return value as an int, or None when it cannot be a window coordinate."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return int(value)
+
+
+def window_geometry(cached, default_x, default_y, default_w, default_h, min_size=64):
+    """Return x, y, width, height for the editor window.
+
+    A negative origin is kept. A size below `min_size`, or a value that is
+    not a finite number, uses the default size. pygame raises for a negative
+    size, so the editor never opens. On pygame 2.6.1 a width of 0 came back
+    as 1 pixel and 0x0 came back as a large window, and that size is what
+    gets saved for the next run.
+    """
+    if not isinstance(cached, dict):
+        cached = {}
+    origin_x = _finite_window_int(cached.get("x", default_x))
+    origin_y = _finite_window_int(cached.get("y", default_y))
+    width = _finite_window_int(cached.get("w", default_w))
+    height = _finite_window_int(cached.get("h", default_h))
+    if origin_x is None:
+        origin_x = default_x
+    if origin_y is None:
+        origin_y = default_y
+    if width is None or height is None or width < min_size or height < min_size:
+        width, height = default_w, default_h
+    return origin_x, origin_y, width, height
+
+
+def open_pose_window(origin_x, origin_y, width, height, fallback):
+    """Open the editor window, retrying the default geometry if pygame refuses.
+
+    `fallback` is (x, y, width, height). The geometry that actually opened
+    is returned with the screen, so a later save does not write the size
+    pygame rejected.
+    """
+    attempts = [(origin_x, origin_y, width, height)]
+    fallback = tuple(fallback)
+    if attempts[0] != fallback:
+        attempts.append(fallback)
+    error = None
+    for ox, oy, ow, oh in attempts:
+        os.environ["SDL_VIDEO_WINDOW_POS"] = f"{ox},{oy}"
+        try:
+            screen = pygame.display.set_mode((int(ow), int(oh)), pygame.RESIZABLE)
+            return screen, ox, oy, ow, oh
+        except pygame.error as exc:
+            error = exc
+            print(f"Could not open the pose editor at ({ox}, {oy}) size {ow}x{oh}: {exc}")
+    raise error
+
+
 def create_t_pose():
     """Create a natural-looking T-pose template based on human proportions"""
     # Natural T-pose keypoints (x, y) coordinates
@@ -980,13 +1037,11 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
             get_cache_dir()  # Ensure cache dir is initialized
             if os.path.exists(WINDOW_CACHE_FILE):
                 with open(WINDOW_CACHE_FILE, 'r') as f:
-                    cached_data = json.load(f)
-                    if isinstance(cached_data, dict):
-                        # Load cached values if they exist, otherwise use defaults
-                        window_x = cached_data.get('x', x)
-                        window_y = cached_data.get('y', y)
-                        window_w = cached_data.get('w', w)
-                        window_h = cached_data.get('h', h)
+                    cached_window = json.load(f)
+                    if isinstance(cached_window, dict):
+                        window_x, window_y, window_w, window_h = window_geometry(
+                            cached_window, x, y, w, h
+                        )
                         print(f"Loaded cached window: {window_x}, {window_y}, {window_w}x{window_h}")
                     else:
                         print("Invalid cached window data format")
@@ -1012,10 +1067,12 @@ def pose_editor(pose_data, padding=100, x=20, y=20, w=1024, h=1024, reset_cached
         people_valid_pairs.append(valid_pairs)
         people_valid_colors.append(valid_colors)
 
-    # Find the currently focused window and match its cached position/size
+    # Find the currently focused window and match its cached position/size.
+    # A size pygame rejects opens at the default instead of failing the run.
     print(f"Creating window at ({window_x}, {window_y}) with size ({window_w}, {window_h})")
-    os.environ['SDL_VIDEO_WINDOW_POS'] = f"{window_x},{window_y}"
-    screen = pygame.display.set_mode((window_w, window_h), pygame.RESIZABLE)
+    screen, window_x, window_y, window_w, window_h = open_pose_window(
+        window_x, window_y, window_w, window_h, (x, y, w, h)
+    )
     pygame.display.set_caption("Pose Editor - ae")
     print(f"Window created, actual size: {pygame.display.get_window_size()}")
 

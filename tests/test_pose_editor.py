@@ -835,6 +835,98 @@ def test_reset_window_opens_at_the_default_not_the_cached_pose(monkeypatch, tmp_
     assert opened["pos"] == "20,20"
 
 
+def test_window_geometry_keeps_a_negative_origin_and_drops_a_bad_size():
+    """A size pygame cannot open must not replace a usable position."""
+    from pose_editor import window_geometry
+
+    defaults = (20, 20, 1024, 1024)
+    assert window_geometry(
+        {"x": -40, "y": 12, "w": 800, "h": 600}, *defaults
+    ) == (-40, 12, 800, 600)
+    assert window_geometry(
+        {"x": -40, "y": 12, "w": 0, "h": 600}, *defaults
+    ) == (-40, 12, 1024, 1024)
+    assert window_geometry(
+        {"x": -40, "y": 12, "w": -5, "h": 600}, *defaults
+    ) == (-40, 12, 1024, 1024)
+    assert window_geometry(
+        {"x": -40, "y": 12, "w": 1, "h": 1}, *defaults
+    ) == (-40, 12, 1024, 1024)
+    assert window_geometry(
+        {"x": 1, "y": 2, "w": 64, "h": 64}, *defaults
+    ) == (1, 2, 64, 64)
+    assert window_geometry(
+        {"x": 1, "y": 2, "w": 63, "h": 600}, *defaults
+    ) == (1, 2, 1024, 1024)
+    assert window_geometry(
+        {"x": "nope", "y": None, "w": 800.0, "h": 600}, *defaults
+    ) == (20, 20, 800, 600)
+    assert window_geometry({"w": True, "h": 600}, *defaults) == (20, 20, 1024, 1024)
+    assert window_geometry("nope", *defaults) == (20, 20, 1024, 1024)
+
+
+def test_unusable_cached_window_size_opens_at_the_default(monkeypatch, tmp_path):
+    """A negative saved size used to raise, and a zero size opened one pixel wide."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    (tmp_path / "window_position.json").write_text(
+        json.dumps({"x": -40, "y": 12, "w": -5, "h": 600})
+    )
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    opened = {}
+    real_set_mode = pygame.display.set_mode
+
+    def tracking_set_mode(size, *args, **kwargs):
+        opened.setdefault("sizes", []).append(tuple(size))
+        opened["pos"] = pose_editor.os.environ.get("SDL_VIDEO_WINDOW_POS")
+        return real_set_mode(size, *args, **kwargs)
+
+    monkeypatch.setattr(pygame.display, "set_mode", tracking_set_mode)
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        image, _edited = pose_editor.pose_editor(
+            pose, padding=8, reset_cached_window_position=False
+        )
+    finally:
+        _release_pose_cache()
+    assert image is not None and image.shape[0] == 1
+    assert opened["sizes"] == [(1024, 1024)]
+    assert opened["pos"] == "-40,12"
+
+
+def test_rejected_window_size_falls_back_to_the_default(monkeypatch, tmp_path):
+    """If pygame refuses the saved size, the editor still opens at the default."""
+    import json
+    import pygame
+
+    pose_editor = _fresh_pose_cache(monkeypatch, tmp_path)
+    (tmp_path / "window_position.json").write_text(
+        json.dumps({"x": 30, "y": 40, "w": 5000, "h": 400})
+    )
+    monkeypatch.setattr(pygame.event, "get", lambda: [pygame.event.Event(pygame.QUIT)])
+    calls = []
+    real_set_mode = pygame.display.set_mode
+
+    def tracking_set_mode(size, *args, **kwargs):
+        calls.append(tuple(size))
+        if size[0] >= 5000:
+            raise pygame.error("too big")
+        return real_set_mode((128, 128), *args, **kwargs)
+
+    monkeypatch.setattr(pygame.display, "set_mode", tracking_set_mode)
+    pose = [{"people": [{"pose_keypoints_2d": [10.0, 20.0, 1.0]}]}]
+    try:
+        image, _edited = pose_editor.pose_editor(
+            pose, padding=8, reset_cached_window_position=False
+        )
+    finally:
+        _release_pose_cache()
+    assert image is not None and image.shape[0] == 1
+    assert calls == [(5000, 400), (1024, 1024)]
+
+
 def test_window_position_is_kept_when_it_cannot_be_read(monkeypatch, tmp_path):
     """Closing without a desktop position must not replace the restored origin."""
     import json
